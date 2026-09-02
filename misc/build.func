@@ -183,7 +183,7 @@ build_container() {
 
   msg_info "Récupération de l'installateur dans le conteneur"
   pct exec "$CT_ID" -- bash -c "apt-get -qq update >/dev/null 2>&1; apt-get -qq install -y curl ca-certificates >/dev/null 2>&1 || true"
-  pct exec "$CT_ID" -- bash -c "curl -fsSL '${OSINT_INSTALL_URL}' -o /root/osint-install.sh" \
+  pct exec "$CT_ID" -- bash -c "curl -fsSL --retry 5 --retry-all-errors --retry-delay 4 '${OSINT_INSTALL_URL}' -o /root/osint-install.sh" \
     || { msg_error "Impossible de télécharger ${OSINT_INSTALL_URL}"; exit 1; }
   msg_ok "Installateur téléchargé"
 

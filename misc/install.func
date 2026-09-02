@@ -43,6 +43,41 @@ apt_install() {
     >>/opt/osint/install.log 2>&1
 }
 
+# retry <essais> <cmd...> — relance avec back-off (utile face au throttling GitHub)
+retry() {
+  local n="$1"; shift
+  local i=1
+  until "$@" >>/opt/osint/install.log 2>&1; do
+    if (( i >= n )); then return 1; fi
+    sleep $(( i * 5 )); i=$(( i + 1 ))
+  done
+  return 0
+}
+
+# fetch_src <owner/repo> <ref> <dest> — récupère un dépôt SANS git : archive
+# tar.gz via curl (--retry pour encaisser le throttling), repli sur git clone.
+# Le contenu du dépôt atterrit directement dans <dest> (pas de sous-dossier).
+fetch_src() {
+  local repo="$1" ref="$2" dest="$3"
+  local tmp top
+  tmp="$(mktemp -d)"
+  export GIT_TERMINAL_PROMPT=0
+  if curl -fsSL --retry 5 --retry-all-errors --retry-delay 4 --connect-timeout 20 \
+       "https://codeload.github.com/${repo}/tar.gz/refs/heads/${ref}" \
+       -o "$tmp/src.tgz" 2>>/opt/osint/install.log \
+     && tar -xzf "$tmp/src.tgz" -C "$tmp" 2>>/opt/osint/install.log; then
+    top="$(find "$tmp" -mindepth 1 -maxdepth 1 -type d | head -n1)"
+    if [[ -n "$top" && -d "$top" ]]; then
+      rm -rf "$dest"; mkdir -p "$(dirname "$dest")"; mv "$top" "$dest"
+      rm -rf "$tmp"; return 0
+    fi
+  fi
+  rm -rf "$tmp"
+  # repli git (échoue vite grâce à GIT_TERMINAL_PROMPT=0 si pas d'accès anonyme)
+  rm -rf "$dest"
+  git clone --depth 1 -b "$ref" "https://github.com/${repo}" "$dest" >>/opt/osint/install.log 2>&1
+}
+
 pipx_install() {
   local pkg="$1" name="${2:-$1}"
   try "pipx : ${name}" env PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin \

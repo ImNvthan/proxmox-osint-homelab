@@ -2,6 +2,19 @@
 
 Format librement inspiré de [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.0.1] - 2026-09-03
+
+### Corrigé
+- Installation : `git clone` remplacé par un téléchargement d'archive `tar.gz`
+  via `curl --retry` (`fetch_src`) pour la charge utile du dépôt **et** pour
+  SpiderFoot — évite l'échec quand GitHub limite les requêtes git anonymes
+  (l'install se retrouvait sans CLI). `GIT_TERMINAL_PROMPT=0` partout : plus
+  d'invite d'identifiants bloquante.
+- `osint-update` sait se mettre à jour sans dépôt git local (archive `tar.gz`).
+- `retry` sur `theHarvester` / `recon-ng` (pipx) et sur la liste de mots SecLists.
+- Si la charge utile `tools/` est introuvable, l'installateur échoue franchement
+  avec la commande de reprise, au lieu de continuer un conteneur inutilisable.
+
 ## [2.0.0] - 2026-09-03
 
 Réécriture orientée **homelab / autopilote**. Repart de la base v1

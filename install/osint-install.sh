@@ -19,6 +19,10 @@ SPIDERFOOT_BIND="${SPIDERFOOT_BIND:-127.0.0.1:5001}"
 OSINT_WEB_BIND="${OSINT_WEB_BIND:-127.0.0.1}"
 PREFIX=/opt/osint
 
+# Jamais d'invite d'identifiants git bloquante : on échoue vite et on
+# privilégie les archives tar.gz via curl (voir fetch_src dans install.func).
+export GIT_TERMINAL_PROMPT=0
+
 mkdir -p "$PREFIX" /etc/osint
 : >/opt/osint/install.log
 
@@ -84,7 +88,8 @@ go_install "github.com/owasp-amass/amass/v4/...@master"                  amass
 # =======================================================================
 section "Outils OSINT Python (pipx, isolés)"
 export PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin
-pipx_install "theHarvester"     theHarvester
+retry 3 env PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin pipx install --pip-args=--no-cache-dir theHarvester \
+  && msg_ok "pipx : theHarvester" || msg_warn "pipx : theHarvester — échec après 3 essais. On continue."
 pipx_install "holehe"           holehe
 pipx_install "maigret"          maigret
 pipx_install "socialscan"       socialscan
@@ -93,18 +98,28 @@ pipx_install "dnstwist[full]"   dnstwist
 pipx_install "checkdmarc"       checkdmarc
 pipx_install "h8mail"           h8mail
 pipx_install "waymore"          waymore
-pipx_install "recon-ng"         recon-ng
+retry 2 env PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin pipx install --pip-args=--no-cache-dir recon-ng \
+  && msg_ok "pipx : recon-ng" || msg_warn "pipx : recon-ng — échec (dépendances lourdes). On continue."
 pipx_install "ignorant"         ignorant
 pipx_install "toutatis"         toutatis
 pipx_install "xeuledoc"         xeuledoc
 pipx_install "ghunt"            ghunt
-try "pipx : blackbird (git)" env PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin \
-    pipx install "git+https://github.com/p1ngul1n0/blackbird"
+# blackbird : archive tar.gz (pas de git), puis pipx sur le dossier
+if fetch_src "p1ngul1n0/blackbird" "main" /opt/blackbird; then
+  try "pipx : blackbird" env PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin \
+      pipx install --pip-args=--no-cache-dir /opt/blackbird
+else
+  msg_warn "blackbird — téléchargement impossible. On continue (sherlock+maigret couvrent les pseudos)."
+fi
 
 # =======================================================================
 section "SpiderFoot (service systemd)"
-[[ -d /opt/spiderfoot ]] || try "clone SpiderFoot" git clone --depth 1 https://github.com/smicallef/spiderfoot /opt/spiderfoot
-if [[ -d /opt/spiderfoot ]]; then
+if [[ ! -d /opt/spiderfoot ]]; then
+  fetch_src "smicallef/spiderfoot" "master" /opt/spiderfoot \
+    && msg_ok "SpiderFoot récupéré" \
+    || msg_warn "SpiderFoot — téléchargement impossible. Service non installé (l'autopilote fonctionne sans)."
+fi
+if [[ -d /opt/spiderfoot && -f /opt/spiderfoot/requirements.txt ]]; then
   try_sh "venv SpiderFoot" \
     "python3 -m venv /opt/spiderfoot/.venv && /opt/spiderfoot/.venv/bin/pip -q install --no-cache-dir -r /opt/spiderfoot/requirements.txt"
   id spiderfoot &>/dev/null || useradd -r -d /opt/spiderfoot -s /usr/sbin/nologin spiderfoot
@@ -132,11 +147,15 @@ try_sh "installation de phoneinfoga" \
 # =======================================================================
 section "CLI OSINT + moteur osintkit + charge utile"
 SRC=/opt/osint/src
-if [[ -d "$SRC/.git" ]]; then
-  try_sh "maj du dépôt" "git -C '$SRC' fetch --depth 1 origin '$OSINT_REPO_BRANCH' && git -C '$SRC' reset --hard 'origin/$OSINT_REPO_BRANCH'"
-else
-  rm -rf "$SRC"
-  try "clone du dépôt" git clone --depth 1 -b "$OSINT_REPO_BRANCH" "$OSINT_REPO_URL" "$SRC"
+OSINT_REPO_SLUG="${OSINT_REPO_URL#https://github.com/}"; OSINT_REPO_SLUG="${OSINT_REPO_SLUG%.git}"
+fetch_src "$OSINT_REPO_SLUG" "$OSINT_REPO_BRANCH" "$SRC" \
+  && msg_ok "dépôt récupéré ($OSINT_REPO_SLUG@$OSINT_REPO_BRANCH)" \
+  || msg_warn "récupération du dépôt en échec — nouvelle tentative au premier « osint-update »"
+
+if [[ ! -d "$SRC/tools" ]]; then
+  msg_error "charge utile tools/ absente — CLI non installée. Réseau/GitHub indisponible ?"
+  msg_error "Relancez :  GIT_TERMINAL_PROMPT=0 bash /root/osint-install.sh"
+  exit 1
 fi
 
 if [[ -d "$SRC/tools" ]]; then
@@ -164,7 +183,7 @@ fi
 # =======================================================================
 section "Listes de mots"
 try_sh "SecLists DNS top 5k" \
-  "curl -fsSL https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/DNS/subdomains-top1million-5000.txt -o /opt/osint/wordlists/subdomains-5000.txt"
+  "curl -fsSL --retry 5 --retry-all-errors --retry-delay 4 https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/DNS/subdomains-top1million-5000.txt -o /opt/osint/wordlists/subdomains-5000.txt"
 
 section "Confidentialité"
 try "activation de Tor" systemctl enable --now tor.service

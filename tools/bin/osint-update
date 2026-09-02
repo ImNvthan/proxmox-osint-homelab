@@ -6,7 +6,10 @@ set -uo pipefail
 
 GO=/usr/local/go/bin/go
 SRC=/opt/osint/src
+REPO_SLUG="${OSINT_REPO_SLUG:-ImNvthan/proxmox-osint-homelab}"
+REPO_BRANCH="${OSINT_REPO_BRANCH:-main}"
 export PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin PATH="/usr/local/go/bin:/usr/local/bin:$PATH"
+export GIT_TERMINAL_PROMPT=0
 
 echo "[*] apt"
 DEBIAN_FRONTEND=noninteractive apt-get -qq update && apt-get -qq -y upgrade || true
@@ -38,10 +41,20 @@ if [[ -d /opt/spiderfoot/.git ]]; then
   systemctl restart spiderfoot.service 2>/dev/null || true
 fi
 
+echo "[*] dépôt osint + CLI + moteur"
+tmp=$(mktemp -d)
 if [[ -d "$SRC/.git" ]]; then
-  echo "[*] dépôt osint + CLI + moteur"
-  branch=$(git -C "$SRC" rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)
+  branch=$(git -C "$SRC" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "$REPO_BRANCH")
   git -C "$SRC" fetch --depth 1 origin "$branch" 2>/dev/null && git -C "$SRC" reset --hard "origin/$branch" 2>/dev/null || true
+elif curl -fsSL --retry 5 --retry-all-errors --retry-delay 4 \
+       "https://codeload.github.com/${REPO_SLUG}/tar.gz/refs/heads/${REPO_BRANCH}" -o "$tmp/src.tgz" \
+     && tar -xzf "$tmp/src.tgz" -C "$tmp"; then
+  top=$(find "$tmp" -mindepth 1 -maxdepth 1 -type d | head -n1)
+  [[ -d "$top/tools" ]] && { rm -rf "$SRC"; mv "$top" "$SRC"; }
+else
+  echo "    (récupération du dépôt impossible — CLI inchangée)"
+fi
+if [[ -d "$SRC/tools" ]]; then
   install -m0755 "$SRC"/tools/bin/*         /usr/local/bin/ 2>/dev/null || true
   install -m0644 "$SRC"/tools/lib/common.sh /opt/osint/lib/common.sh 2>/dev/null || true
   rm -rf /opt/osint/lib/osintkit
@@ -50,5 +63,6 @@ if [[ -d "$SRC/.git" ]]; then
   systemctl daemon-reload 2>/dev/null || true
   systemctl restart osint-web.service 2>/dev/null || true
 fi
+[[ -n "${tmp:-}" && -d "${tmp:-/nonexistent}" ]] && rm -rf "$tmp"
 
 echo "[+] mise à jour terminée — $(date -Is)"
