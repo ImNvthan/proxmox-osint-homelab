@@ -1,0 +1,31 @@
+{
+  "name": "OSINT Homelab",
+  "slug": "osint",
+  "categories": [8],
+  "date_created": "2026-09-03",
+  "type": "ct",
+  "updateable": true,
+  "privileged": false,
+  "interface_port": 8080,
+  "documentation": "https://github.com/ImNvthan/proxmox-osint-homelab/blob/main/README.md",
+  "website": "https://github.com/ImNvthan/proxmox-osint-homelab",
+  "logo": null,
+  "description": "LXC Debian : homelab OSINT à autopilote. On saisit un sélecteur (numéro, e-mail, pseudo, nom, domaine, IP), le type est détecté, les pipelines de reconnaissance passive s'enchaînent, l'outil pivote sur les sélecteurs découverts et construit un graphe d'entités + une affiche (dossier une page) par personne — famille/proches en option. Interface web, SpiderFoot en service, garde-fous RGPD (confirmation, purge, TTL).",
+  "install_methods": [
+    {
+      "type": "default",
+      "script": "ct/osint.sh",
+      "resources": { "cpu": 4, "ram": 8192, "hdd": 40, "os": "debian", "version": "12" }
+    }
+  ],
+  "default_credentials": {
+    "username": "root",
+    "password": "généré aléatoirement à la création — affiché à la fin de l'installation"
+  },
+  "notes": [
+    { "text": "Démarrage : `pct enter <ctid>` puis `osint` (invite) ou `osint auto <valeur>`.", "type": "info" },
+    { "text": "Interface web sur 127.0.0.1:8080 ; `osint web expose` l'ouvre sur l'IP du LXC.", "type": "info" },
+    { "text": "SpiderFoot écoute sur 127.0.0.1:5001. Clés d'API facultatives dans /etc/osint/osint.env.", "type": "info" },
+    { "text": "Traitement de données personnelles : investigations autorisées uniquement, base légale RGPD requise. La recherche famille/proches est désactivée par défaut.", "type": "warning" }
+  ]
+}

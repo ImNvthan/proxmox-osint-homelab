@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Exemple d'affiche — LXC OSINT v2</title>
+<style>
+:root{
+  --bg:#0f1115; --card:#171a21; --ink:#e7eaf0; --muted:#93a1b3; --line:#2a2f3a;
+  --accent:#7fd1ff; --accent2:#ffd479; --ok:#7fe0a1; --warn:#ffb454; --low:#8892a6;
+}
+*{box-sizing:border-box}
+body{margin:0;font:14px/1.55 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink)}
+.wrap{max-width:960px;margin:24px auto;padding:0 18px}
+a{color:var(--accent);text-decoration:none}
+.ribbon{position:fixed;top:14px;right:-46px;transform:rotate(45deg);background:#8a2b2b;color:#fff;
+  padding:6px 60px;font-weight:700;letter-spacing:2px;font-size:12px;opacity:.9}
+.affiche{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:26px 30px;margin:18px 0}
+.affiche h1{margin:.1em 0;font-size:26px;letter-spacing:.5px}
+.affiche .sub{color:var(--muted);margin-bottom:14px}
+.hdr{display:flex;gap:22px;align-items:flex-start;justify-content:space-between}
+.photo{width:104px;height:104px;border-radius:12px;border:1px solid var(--line);background:
+  repeating-linear-gradient(45deg,#1b2028,#1b2028 8px,#20262f 8px,#20262f 16px)}
+.grid{display:grid;grid-template-columns:150px 1fr;gap:6px 16px;margin:10px 0 4px}
+.grid dt{color:var(--muted)} .grid dd{margin:0}
+h2.section{font-size:13px;text-transform:uppercase;letter-spacing:1.5px;color:var(--accent2);
+  border-top:1px solid var(--line);padding-top:12px;margin:18px 0 8px}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border:1px solid var(--line);
+  border-radius:999px;background:#0d1016;font-size:13px}
+.chip small{color:var(--muted)}
+.badge{font-size:11px;padding:1px 6px;border-radius:6px;border:1px solid var(--line);color:var(--muted)}
+.b-hi{color:#0c1a10;background:var(--ok);border-color:transparent}
+.b-md{color:#1c1405;background:var(--warn);border-color:transparent}
+.b-lo{color:var(--low)}
+.kin{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:8px 0}
+.kin h3{margin:0 0 4px;font-size:15px}
+.muted{color:var(--muted)}
+.foot{color:var(--muted);font-size:12px;border-top:1px solid var(--line);margin-top:20px;padding-top:12px}
+.warnbar{background:#3a2a12;border:1px solid #6b4c1d;color:#ffd9a8;border-radius:10px;padding:10px 14px;font-size:13px;margin:12px 0}
+</style></head><body>
+<div class="ribbon">EXEMPLE FICTIF</div>
+<div class="wrap">
+<p class="muted">Aperçu de la sortie <code>dossier.html</code> produite par <code>osint auto "…" --relations</code>.
+Toutes les données ci-dessous sont <b>inventées</b>.</p>
+
+<article class="affiche">
+  <div class="hdr">
+    <div>
+      <h1>DUPONT Jean</h1>
+      <div class="sub">Prénom : Jean · Nom : Dupont · fiabilité fiche <span class="badge b-md">probable</span></div>
+    </div>
+    <div class="photo" title="photo de profil (si trouvée)"></div>
+  </div>
+
+  <h2 class="section">Identité</h2>
+  <dl class="grid">
+    <dt>Nom</dt><dd>Dupont</dd>
+    <dt>Prénom</dt><dd>Jean</dd>
+    <dt>Téléphone</dt><dd>+33 6 12 34 56 78 <span class="muted">(mobile, Orange France)</span> <span class="badge b-hi">sûr</span></dd>
+    <dt>E-mail</dt><dd>jean.dupont@gmail.com <span class="badge b-hi">sûr</span><br>j.dupont@acme.fr <span class="badge b-md">probable</span></dd>
+    <dt>Adresse</dt><dd>Lyon 3ᵉ (région) <span class="badge b-lo">piste</span></dd>
+    <dt>Employeur / orga</dt><dd>ACME SAS <span class="badge b-md">probable</span></dd>
+  </dl>
+
+  <h2 class="section">Réseaux sociaux</h2>
+  <div class="chips">
+    <span class="chip"><b>twitter</b> <a href="#">@jdupont</a> <span class="badge b-hi">sûr</span></span>
+    <span class="chip"><b>instagram</b> <a href="#">jean.dupont</a> <span class="badge b-md">probable</span></span>
+    <span class="chip"><b>linkedin</b> <a href="#">jean-dupont-acme</a> <span class="badge b-hi">sûr</span></span>
+    <span class="chip"><b>github</b> <a href="#">jdupont</a> <span class="badge b-hi">sûr</span></span>
+    <span class="chip"><b>strava</b> <a href="#">jdupont77</a> <span class="badge b-lo">piste</span></span>
+  </div>
+
+  <h2 class="section">Famille / proches (2)</h2>
+  <div class="warnbar">Ces personnes sont des <b>tiers</b>. Ne conservez des données sur elles qu'avec une base
+  légale (RGPD art. 6). Les liens ci-dessous sont déduits de mentions publiques et <b>non vérifiés</b>.</div>
+  <div class="kin">
+    <h3>DUPONT Marie <span class="muted">— même nom de famille <span class="badge b-md">probable</span></span></h3>
+    <dl class="grid">
+      <dt>Téléphone</dt><dd>—</dd><dt>E-mail</dt><dd>marie.dupont@gmail.com <span class="badge b-lo">piste</span></dd>
+      <dt>Adresse</dt><dd>—</dd>
+    </dl>
+    <div class="chips">
+      <span class="chip"><b>facebook</b> <a href="#">marie.dupont.94</a> <span class="badge b-md">probable</span></span>
+      <span class="chip"><b>instagram</b> <a href="#">mimidupont</a> <span class="badge b-lo">piste</span></span>
+    </div>
+  </div>
+  <div class="kin">
+    <h3>MARTIN Paul <span class="muted">— co-mention (parenté) <span class="badge b-lo">piste</span></span></h3>
+    <div class="chips"><span class="chip"><b>linkedin</b> <a href="#">paul-martin</a> <span class="badge b-lo">piste</span></span></div>
+  </div>
+
+  <div class="foot">
+    Sources : run:phone_… · run:username_jdupont_… · run:email_… · maigret · holehe · phoneinfoga · relations<br>
+    Fiche générée automatiquement — <b>à vérifier</b> avant tout usage. Investigations autorisées uniquement.
+  </div>
+</article>
+
+<p class="muted">Le fichier réel liste aussi une carte par personne dans <code>entities/&lt;nom&gt;/dossier.html</code>,
+un graphe d'entités (<code>graph.html</code> / <code>graph.json</code>), et le détail brut de chaque outil.</p>
+</div></body></html>

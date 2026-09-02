@@ -1,0 +1,220 @@
+#!/usr/bin/env bash
+# build.func - cadre autonome de construction de LXC pour le homelab OSINT.
+# Style inspiré de Proxmox VE Community Scripts (community-scripts.org) mais
+# sans aucune dépendance amont à l'exécution.
+#
+# Chargé par ct/osint.sh. Fournit : couleurs, messages, vérifs d'environnement,
+# menus whiptail et build_container() (pct create + provisionnement).
+# Licence : MIT
+
+if [[ -t 2 ]]; then
+  YW=$'\033[33m'; GN=$'\033[1;92m'; RD=$'\033[01;31m'; BL=$'\033[36m'
+  CL=$'\033[m'; BOLD=$'\033[1m'; DGN=$'\033[32m'
+else
+  YW=""; GN=""; RD=""; BL=""; CL=""; BOLD=""; DGN=""
+fi
+CM="${GN}✔${CL}"; CROSS="${RD}✗${CL}"; INFO="${BL}i${CL}"
+
+msg_info()  { echo -e " ${YW}➜ ${CL}${1-}"; }
+msg_ok()    { echo -e " ${CM} ${GN}${1-}${CL}"; }
+msg_warn()  { echo -e " ${YW}! ${1-}${CL}"; }
+msg_error() { echo -e " ${CROSS} ${RD}${1-}${CL}"; }
+
+catch_errors() { set -Eeuo pipefail; trap 'error_handler $? $LINENO "$BASH_COMMAND"' ERR; }
+error_handler() {
+  local code=$1 line=$2 cmd=${3:-}
+  msg_error "Ligne ${line} : « ${cmd} » -> code ${code}"
+  if [[ -n "${CT_ID:-}" ]] && pct status "$CT_ID" &>/dev/null; then
+    msg_warn "Conteneur ${CT_ID} partiellement créé — supprimez-le : pct destroy ${CT_ID}"
+  fi
+  exit "$code"
+}
+
+header_info() {
+  clear 2>/dev/null || true
+  cat <<'EOF'
+   ___  ____ ___ _   _ _____
+  / _ \/ ___|_ _| \ | |_   _|
+ | | | \___ \| ||  \| | | |
+ | |_| |___) | || |\  | | |
+  \___/|____/___|_| \_| |_|
+EOF
+  echo -e "${BL} Homelab OSINT autopilote  •  LXC Proxmox VE${CL}\n"
+}
+
+root_check() { [[ "$(id -u)" -eq 0 ]] || { msg_error "Lancez ce script en root sur l'hôte Proxmox VE."; exit 1; }; }
+pve_check() {
+  command -v pveversion &>/dev/null || { msg_error "« pveversion » introuvable — à lancer sur un nœud Proxmox VE."; exit 1; }
+  local v; v=$(pveversion | grep -oP 'pve-manager/\K[0-9]+' || echo 0)
+  (( v < 8 )) && msg_warn "Testé sur PVE 8.x/9.x — version ${v} détectée. On continue."
+  return 0
+}
+arch_check() {
+  [[ "$(dpkg --print-architecture 2>/dev/null)" == "amd64" ]] || \
+    msg_warn "Seul amd64 est testé ; certains outils OSINT n'ont que des binaires amd64."
+  return 0
+}
+pkg_check() {
+  local miss=() b
+  for b in whiptail pct pvesm pveam curl; do command -v "$b" &>/dev/null || miss+=("$b"); done
+  ((${#miss[@]})) && { msg_error "Commandes manquantes : ${miss[*]}"; exit 1; }
+  return 0
+}
+
+variables() {
+  APP="${APP:-OSINT}"
+  NSAPP="$(echo "$APP" | tr '[:upper:]' '[:lower:]')"
+  var_os="${var_os:-debian}"; var_version="${var_version:-12}"
+  var_cpu="${var_cpu:-4}"; var_ram="${var_ram:-8192}"; var_disk="${var_disk:-40}"
+  var_unprivileged="${var_unprivileged:-1}"; var_tags="${var_tags:-osint}"
+  var_hostname="${var_hostname:-osint}"; var_bridge="${var_bridge:-vmbr0}"
+  var_net="${var_net:-dhcp}"; var_gateway="${var_gateway:-}"
+  var_disableip6="${var_disableip6:-no}"; var_verbose="${var_verbose:-no}"
+  var_start="${var_start:-yes}"; var_onboot="${var_onboot:-1}"
+  OSINT_REPO_URL="${OSINT_REPO_URL:-https://github.com/ImNvthan/proxmox-osint-homelab}"
+  OSINT_REPO_BRANCH="${OSINT_REPO_BRANCH:-main}"
+  OSINT_INSTALL_URL="${OSINT_INSTALL_URL:-https://raw.githubusercontent.com/ImNvthan/proxmox-osint-homelab/${OSINT_REPO_BRANCH}/install/osint-install.sh}"
+  LXC_PW="$(openssl rand -base64 24 2>/dev/null | tr -dc 'A-Za-z0-9' | cut -c1-20)"
+  [[ -n "$LXC_PW" ]] || LXC_PW="Osint$(date +%s)x"
+  return 0
+}
+
+select_storage() {
+  local content="$1" list name choice menu=()
+  mapfile -t list < <(pvesm status --content "$content" 2>/dev/null | awk 'NR>1 {print $1}')
+  ((${#list[@]})) || { msg_error "Aucun stockage « ${content} »." >&2; exit 1; }
+  ((${#list[@]} == 1)) && { echo "${list[0]}"; return; }
+  for name in "${list[@]}"; do menu+=("$name" ""); done
+  choice=$(whiptail --backtitle "LXC OSINT" --title "Stockage « ${content} »" \
+    --menu "Choisissez le pool :" 16 60 8 "${menu[@]}" 3>&1 1>&2 2>&3) || exit 1
+  echo "$choice"
+}
+
+get_next_ctid() {
+  local id; id=$(pvesh get /cluster/nextid 2>/dev/null || true)
+  [[ -n "$id" ]] || { id=100; while pct status "$id" &>/dev/null; do ((id++)); done; }
+  echo "$id"
+}
+
+resolve_template() {
+  local store="$1" want ref line
+  msg_info "Actualisation du catalogue de modèles" >&2
+  pveam update &>/dev/null || true
+  want="${var_os}-${var_version}-standard"
+  ref=$(pveam available --section system 2>/dev/null | awk '{print $2}' \
+        | grep -E "^${want}_.*_amd64\.tar\.(zst|gz|xz)$" | sort -V | tail -n1) || true
+  [[ -n "$ref" ]] || { msg_error "Aucun modèle « ${want} » via pveam." >&2; exit 1; }
+  if ! pveam list "$store" 2>/dev/null | awk '{print $1}' | grep -q "/${ref}$"; then
+    msg_info "Téléchargement du modèle ${ref}" >&2
+    pveam download "$store" "$ref" >&2
+  fi
+  line=$(pveam list "$store" 2>/dev/null | awk '{print $1}' | grep "/${ref}$" | head -n1) || true
+  [[ -n "$line" ]] || line="${store}:vztmpl/${ref}"
+  echo "$line"
+}
+
+default_settings() {
+  CT_ID="$(get_next_ctid)"; CT_HOSTNAME="$var_hostname"
+  CORE_COUNT="$var_cpu"; RAM_SIZE="$var_ram"; DISK_SIZE="$var_disk"
+  BRG="$var_bridge"; NET="$var_net"; GATE="$var_gateway"
+  UNPRIVILEGED="$var_unprivileged"; DISABLEIP6="$var_disableip6"; VERBOSE="$var_verbose"
+  echo -e "${INFO} Réglages ${BOLD}par défaut${CL}"
+  echo -e "    CTID ${BOLD}${CT_ID}${CL} • ${BOLD}${var_os} ${var_version}${CL} • ${BOLD}${CORE_COUNT}${CL} vCPU • ${BOLD}${RAM_SIZE}${CL} Mio • ${BOLD}${DISK_SIZE}${CL} Go"
+  echo -e "    ${BOLD}$([[ $UNPRIVILEGED == 1 ]] && echo "non privilégié" || echo "privilégié")${CL} • pont ${BOLD}${BRG}${CL} • réseau ${BOLD}${NET}${CL} • étiquettes ${BOLD}${var_tags}${CL}\n"
+}
+
+advanced_settings() {
+  CT_ID=$(whiptail --inputbox "ID du conteneur" 8 58 "$(get_next_ctid)" --title "ID DU CT" 3>&1 1>&2 2>&3) || exit 1
+  CT_HOSTNAME=$(whiptail --inputbox "Nom d'hôte" 8 58 "$var_hostname" --title "NOM D'HÔTE" 3>&1 1>&2 2>&3) || exit 1
+  CORE_COUNT=$(whiptail --inputbox "Cœurs vCPU" 8 58 "$var_cpu" --title "CPU" 3>&1 1>&2 2>&3) || exit 1
+  RAM_SIZE=$(whiptail --inputbox "RAM en Mio" 8 58 "$var_ram" --title "RAM" 3>&1 1>&2 2>&3) || exit 1
+  DISK_SIZE=$(whiptail --inputbox "Disque racine en Go" 8 58 "$var_disk" --title "DISQUE" 3>&1 1>&2 2>&3) || exit 1
+  BRG=$(whiptail --inputbox "Pont réseau" 8 58 "$var_bridge" --title "PONT" 3>&1 1>&2 2>&3) || exit 1
+  if whiptail --yesno "Utiliser le DHCP ?  (Non = IP fixe CIDR)" 8 60 --title "RÉSEAU"; then
+    NET="dhcp"; GATE=""
+  else
+    NET=$(whiptail --inputbox "IP fixe CIDR, ex. 192.168.1.50/24" 8 68 "192.168.1.50/24" --title "IP FIXE" 3>&1 1>&2 2>&3) || exit 1
+    GATE=$(whiptail --inputbox "Passerelle" 8 58 "192.168.1.1" --title "PASSERELLE" 3>&1 1>&2 2>&3) || exit 1
+  fi
+  if whiptail --yesno "Conteneur NON PRIVILÉGIÉ ? (recommandé)" 8 60 --title "PRIVILÈGES"; then UNPRIVILEGED=1; else UNPRIVILEGED=0; fi
+  if whiptail --yesno "Désactiver l'IPv6 ?" 8 60 --title "IPv6"; then DISABLEIP6="yes"; else DISABLEIP6="no"; fi
+  if whiptail --yesno "Sortie d'installation verbeuse ?" 8 60 --title "VERBEUX"; then VERBOSE="yes"; else VERBOSE="no"; fi
+  whiptail --yesno "Créer le CT ${CT_ID} (${CT_HOSTNAME}) ?" 10 58 --title "CONFIRMATION" || { msg_warn "Annulé."; exit 1; }
+}
+
+start() {
+  header_info
+  variables
+  if whiptail --backtitle "LXC OSINT" --title "INSTALLATEUR HOMELAB OSINT" \
+     --yesno "Crée un LXC Debian et installe le homelab OSINT (autopilote + outils + web).\n\nRéglages PAR DÉFAUT ?" 12 64 \
+     --defaultno --yes-button "Par défaut" --no-button "Avancé" 3>&1 1>&2 2>&3; then
+    default_settings
+  else
+    advanced_settings
+  fi
+}
+
+build_container() {
+  TEMPLATE_STORAGE="$(select_storage vztmpl)"
+  CONTAINER_STORAGE="$(select_storage rootdir)"
+  TEMPLATE="$(resolve_template "$TEMPLATE_STORAGE")"
+
+  local netline="name=eth0,bridge=${BRG}"
+  if [[ "$NET" == "dhcp" ]]; then netline+=",ip=dhcp"
+  else netline+=",ip=${NET}"; [[ -n "$GATE" ]] && netline+=",gw=${GATE}"; fi
+
+  local -a opts=(
+    --hostname "$CT_HOSTNAME" --cores "$CORE_COUNT" --memory "$RAM_SIZE" --swap 512
+    --rootfs "${CONTAINER_STORAGE}:${DISK_SIZE}" --net0 "$netline" --onboot "$var_onboot"
+    --features "nesting=1,keyctl=1" --unprivileged "$UNPRIVILEGED"
+    --tags "$var_tags" --ostype "$var_os" --password "$LXC_PW"
+  )
+
+  msg_info "Création du LXC ${CT_ID} depuis ${TEMPLATE##*/}"
+  pct create "$CT_ID" "$TEMPLATE" "${opts[@]}" >/dev/null
+  msg_ok "Conteneur ${CT_ID} créé"
+
+  msg_info "Démarrage du conteneur"
+  pct start "$CT_ID"
+  for _ in $(seq 1 30); do pct exec "$CT_ID" -- getent hosts github.com &>/dev/null && break; sleep 2; done
+  pct exec "$CT_ID" -- getent hosts github.com &>/dev/null \
+    || { msg_error "Pas de connectivité réseau — vérifiez le pont ${BRG}."; exit 1; }
+  msg_ok "Conteneur en ligne"
+
+  msg_info "Récupération de l'installateur dans le conteneur"
+  pct exec "$CT_ID" -- bash -c "apt-get -qq update >/dev/null 2>&1; apt-get -qq install -y curl ca-certificates >/dev/null 2>&1 || true"
+  pct exec "$CT_ID" -- bash -c "curl -fsSL '${OSINT_INSTALL_URL}' -o /root/osint-install.sh" \
+    || { msg_error "Impossible de télécharger ${OSINT_INSTALL_URL}"; exit 1; }
+  msg_ok "Installateur téléchargé"
+
+  msg_info "Installation OSINT (compilations Go, pip, SpiderFoot… ~15–30 min)"
+  local runner="OSINT_REPO_URL='${OSINT_REPO_URL}' OSINT_REPO_BRANCH='${OSINT_REPO_BRANCH}' VERBOSE='${VERBOSE}' DISABLEIP6='${DISABLEIP6}' bash /root/osint-install.sh"
+  if [[ "$VERBOSE" == "yes" ]]; then
+    pct exec "$CT_ID" -- bash -c "$runner"
+  else
+    pct exec "$CT_ID" -- bash -c "$runner" 2>&1 | grep -E '^\s*(➜|✔|!|✗|==)' || true
+  fi
+  msg_ok "Homelab OSINT installé"
+}
+
+description() {
+  local ip; ip=$(pct exec "$CT_ID" -- hostname -I 2>/dev/null | awk '{print $1}')
+  pct set "$CT_ID" -description "# Homelab OSINT (autopilote)
+
+Construit par [proxmox-osint-homelab](${OSINT_REPO_URL}).
+
+- \`osint\` : invite « Que savez-vous ? »
+- \`osint auto <valeur> [--relations]\` : autopilote (graphe + affiche)
+- Interface web : http://${ip:-<ip>}:8080
+- SpiderFoot : 127.0.0.1:5001 · Tout mettre à jour : \`osint-update\`
+- Enquêtes : /opt/osint/cases · purge RGPD : \`osint case purge <id>\`" 2>/dev/null || true
+
+  echo
+  msg_ok "Le homelab OSINT ${BOLD}${CT_ID}${CL} est prêt"
+  echo -e "    ${INFO} Adresse     : ${BOLD}${ip:-voir pct}${CL}"
+  echo -e "    ${INFO} Connexion   : ${BOLD}root${CL} / ${BOLD}${LXC_PW}${CL}"
+  echo -e "    ${INFO} Y entrer    : ${BOLD}pct enter ${CT_ID}${CL}  puis  ${BOLD}osint${CL}"
+  echo -e "    ${INFO} Web         : ${BOLD}http://${ip:-<ip>}:8080${CL}  (osint web expose pour le LAN)"
+  echo -e "    ${INFO} Clés d'API  : ${BOLD}/etc/osint/osint.env${CL} (facultatif)\n"
+  msg_warn "Cibles autorisées uniquement. Données personnelles : voir docs/LEGAL.md."
+}

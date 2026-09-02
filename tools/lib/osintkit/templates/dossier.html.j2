@@ -1,0 +1,9 @@
+{% import "_macros.j2" as m %}<!doctype html>
+<html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Affiche — {{ p.display }}</title>
+<style>{% include "_base.css" %}</style>
+</head><body><div class="wrap">
+  <p class="muted"><a href="../../dossier.html">&larr; dossier de l'enquête {{ case.case }}</a></p>
+  {{ m.person_card(p, nested=False) }}
+</div></body></html>

@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# osint-monitor — surveillance planifiée d'une cible ; alerte au changement.
+#
+#   osint-monitor add domain example.com        # moniteur quotidien
+#   osint-monitor add auto "Jean Dupont"        # autopilote périodique
+#   osint-monitor list
+#   osint-monitor run <nom>
+#   systemctl enable --now osint-monitor@<nom>.timer
+set -uo pipefail
+. /opt/osint/lib/common.sh
+
+CONFDIR=/etc/osint/monitors
+mkdir -p "$CONFDIR"
+
+case "${1:-}" in
+  add|ajouter)
+    kind="${2:?type (domain|username|email|phone|ip|auto)}"; target="${3:?cible}"
+    name="${4:-${kind}-$(slugify "$target")}"
+    printf 'KIND=%s\nTARGET=%q\n' "$kind" "$target" >"$CONFDIR/$name.conf"
+    systemctl enable --now "osint-monitor@${name}.timer" 2>/dev/null \
+      && ok "moniteur « $name » activé (quotidien)" \
+      || warn "config écrite ; activez : systemctl enable --now osint-monitor@${name}.timer"
+    exit 0 ;;
+  list|liste)
+    for f in "$CONFDIR"/*.conf; do [[ -e "$f" ]] || continue
+      n=$(basename "$f" .conf); . "$f"; printf '%-30s %s %s\n' "$n" "$KIND" "$TARGET"
+    done; exit 0 ;;
+  run) NAME="${2:?nom}" ;;
+  *)   NAME="${1:?usage : osint-monitor <nom> | add|list|run}" ;;
+esac
+
+CONF="$CONFDIR/$NAME.conf"
+[[ -f "$CONF" ]] || die "aucune config : $CONF"
+# shellcheck disable=SC1090
+. "$CONF"; : "${KIND:?}" "${TARGET:?}"
+
+STATE="/opt/osint/monitor-state/$NAME"; mkdir -p "$STATE"
+log "moniteur « $NAME » → $KIND $TARGET"
+
+if [[ "$KIND" == auto ]]; then
+  newrun=$(osint-auto "$TARGET" --yes --case "monitor_${NAME}_$(date +%Y%m%d-%H%M%S)" | tail -n1)
+  fp_src=$(cat "$newrun/graph.json" 2>/dev/null)
+else
+  newrun=$("osint-recon-$KIND" "$TARGET" | tail -n1)
+  fp_src=$(cat "$newrun/raw/"{subs.txt,live.txt,holehe.txt,sherlock.txt,resolved.txt,selectors.jsonl} 2>/dev/null)
+fi
+[[ -n "$newrun" ]] || die "le pipeline n'a produit aucun répertoire"
+
+fp_new=$(printf '%s' "$fp_src" | sort -u | sha256sum | cut -d' ' -f1)
+fp_old=$(cat "$STATE/fingerprint" 2>/dev/null || echo none)
+echo "$fp_new" >"$STATE/fingerprint"; echo "$newrun" >>"$STATE/history"
+
+if [[ "$fp_new" != "$fp_old" && "$fp_old" != "none" ]]; then
+  msg="[osint-monitor] changement détecté : $KIND $TARGET → $newrun"
+  warn "$msg"
+  [[ -n "${OSINT_NOTIFY_CMD:-}" ]] && { OSINT_MONITOR_NAME="$NAME" OSINT_RUN="$newrun" bash -c "$OSINT_NOTIFY_CMD" <<<"$msg" || warn "notification en échec"; }
+else
+  ok "aucun changement (${fp_new:0:12})"
+fi

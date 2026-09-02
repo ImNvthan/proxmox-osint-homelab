@@ -1,0 +1,38 @@
+name: lint
+
+on:
+  push:
+    paths: ['ct/**', 'install/**', 'misc/**', 'tools/**', '.github/workflows/shellcheck.yml']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Lint shell scripts
+        run: |
+          shopt -s globstar nullglob
+          files=(ct/*.sh install/*.sh misc/*.func tools/bin/* tools/lib/*.sh)
+          printf '%s\n' "${files[@]}"
+          # SC1091: can't follow runtime-only sourced files
+          shellcheck -x -S warning -e SC1091 "${files[@]}"
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - run: pip install pyflakes
+      - run: python -m pyflakes tools/lib/osintkit/*.py
+      - name: Import smoke test
+        run: PYTHONPATH=tools/lib python -c "import osintkit.classify, osintkit.normalize, osintkit.extract, osintkit.graph"
+      - name: classify sanity
+        run: |
+          PYTHONPATH=tools/lib python -m osintkit.classify "+33612345678" | grep -q '^phone'
+          PYTHONPATH=tools/lib python -m osintkit.classify "a@b.com"      | grep -q '^email'
+          PYTHONPATH=tools/lib python -m osintkit.classify "Jean Dupont"  | grep -q '^person'

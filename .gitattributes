@@ -1,0 +1,9 @@
+# Force LF on every script so it runs on Linux even when authored on Windows
+* text=auto eol=lf
+*.sh      text eol=lf
+*.func    text eol=lf
+*.py      text eol=lf
+*.j2      text eol=lf
+*.service text eol=lf
+*.timer   text eol=lf
+tools/bin/* text eol=lf

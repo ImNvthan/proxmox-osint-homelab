@@ -1,0 +1,20 @@
+# Local scratch / editor
+*.swp
+*.bak
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+__pycache__/
+*.pyc
+
+# Never commit real secrets
+osint.env
+*.env
+!*.env.example
+
+# Runtime data that may be generated next to the repo during testing
+runs/
+cases/
+screens/
+*.log

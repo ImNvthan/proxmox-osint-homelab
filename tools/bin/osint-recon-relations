@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# osint-recon-relations "Prénom Nom" [--ville V] [--entreprise E] [--pays FR]
+#
+# Découverte de PROCHES / FAMILLE à partir d'un nom, via sources publiques et
+# requêtes de moteurs de recherche uniquement. GARDE-FOU : refuse de tourner
+# tant que OSINT_ALLOW_RELATIONS=1 (ou --autoriser) n'est pas positionné, car
+# cela traite des données personnelles de TIERS (RGPD : base légale requise).
+set -uo pipefail
+. /opt/osint/lib/common.sh
+
+NAME=""; CITY=""; COMPANY=""; COUNTRY="$OSINT_REGION"; FORCE=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --ville|--city)         CITY="$2"; shift 2 ;;
+    --entreprise|--company) COMPANY="$2"; shift 2 ;;
+    --pays|--country)       COUNTRY="$2"; shift 2 ;;
+    --autoriser|--allow)    FORCE=1; shift ;;
+    *) NAME="${NAME:+$NAME }$1"; shift ;;
+  esac
+done
+require_target "$NAME"
+
+if [[ "${OSINT_ALLOW_RELATIONS:-0}" != "1" && $FORCE -ne 1 ]]; then
+  die "recherche de proches désactivée. Relancez avec --autoriser, ou exportez
+     OSINT_ALLOW_RELATIONS=1, APRÈS avoir vérifié votre base légale (docs/LEGAL.md).
+     Vous allez traiter des données personnelles de personnes qui ne sont pas votre cible."
+fi
+
+warn "TIERS : vous recherchez l'entourage de « $NAME ». Minimisez, justifiez, purgez."
+
+RUNDIR="$(new_run relations "$NAME")"
+cd "$RUNDIR/raw" || die "impossible d'entrer dans le répertoire d'exécution"
+
+args=("$NAME")
+[[ -n "$CITY" ]]    && args+=(--ville "$CITY")
+[[ -n "$COMPANY" ]] && args+=(--entreprise "$COMPANY")
+[[ -n "$COUNTRY" ]] && args+=(--pays "$COUNTRY")
+[[ -n "${SERPAPI_KEY:-}" ]] && args+=(--serpapi "$SERPAPI_KEY")
+args+=(--out "$RUNDIR/raw/relations.json")
+
+# le module écrit lui-même relations.json ; outfile vide -> stdout dans logs/
+run relations "" -- "$OSINT_PY" -m osintkit.relations "${args[@]}"
+
+if [[ -s "$RUNDIR/raw/relations.json" ]]; then
+  n=$(jq '.relations | length' "$RUNDIR/raw/relations.json" 2>/dev/null || echo 0)
+  ok "$n candidat(s) proche(s) — tous NON vérifiés, à valider humainement"
+  jq -r '.relations[] | "  \(.confidence)  \(.relation)\t\(.name)"' "$RUNDIR/raw/relations.json" 2>/dev/null | head -n 20 || true
+fi
+
+finish_run

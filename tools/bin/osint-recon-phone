@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# osint-recon-phone <+E.164>
+# Parse E.164 (opérateur/type/région) + phoneinfoga + vérif. d'inscription ignorant.
+set -uo pipefail
+. /opt/osint/lib/common.sh
+
+TARGET="${1:-}"; require_target "$TARGET"
+[[ "$TARGET" == +* ]] || warn "format E.164 attendu (ex. +33612345678) — on continue"
+
+RUNDIR="$(new_run phone "$TARGET")"
+cd "$RUNDIR/raw" || die "impossible d'entrer dans le répertoire d'exécution"
+log "recherche sur numéro → $TARGET"
+
+# Analyse locale (python-phonenumbers)
+export OSINT_PHONE="$TARGET" OSINT_REGION
+run_sh parse phone-parse.json \
+  "$OSINT_PY - <<'PY'
+import json, os
+from osintkit.normalize import norm_phone
+raw = os.environ.get('OSINT_PHONE', '')
+e164, meta = norm_phone(raw, os.environ.get('OSINT_REGION', 'FR'))
+print(json.dumps({'input': raw, 'e164': e164, **meta}, ensure_ascii=False, indent=2))
+PY"
+
+if have phoneinfoga; then
+  run phoneinfoga phoneinfoga.txt -- phoneinfoga scan -n "$TARGET"
+  run_sh phoneinfoga-json phoneinfoga.json "phoneinfoga scan -n '$TARGET' --json 2>/dev/null || true"
+else
+  warn "phoneinfoga absent"
+fi
+
+if have ignorant; then
+  digits="${TARGET//[^0-9]/}"
+  for cclen in 1 2 3; do
+    cc="${digits:0:$cclen}"; nat="${digits:$cclen}"
+    [[ ${#nat} -ge 6 ]] && run_sh "ignorant-cc${cc}" "ignorant_${cc}.txt" "ignorant $cc $nat || true"
+  done
+fi
+
+# Dorks numéro (formats FR + international) à ouvrir dans un navigateur
+nat_fr="${TARGET/#+33/0}"
+{
+  echo "# Dorks pour $TARGET"
+  for form in "$TARGET" "$nat_fr" "${nat_fr:0:2} ${nat_fr:2:2} ${nat_fr:4:2} ${nat_fr:6:2} ${nat_fr:8:2}"; do
+    echo "\"$form\""
+    echo "\"$form\" (site:facebook.com OR site:leboncoin.fr OR site:pagesjaunes.fr OR site:copainsdavant.linternaute.com)"
+  done
+} >dorks-phone.md
+
+finish_run

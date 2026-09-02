@@ -1,0 +1,17 @@
+
+   ___  ____ ___ _   _ _____     HOMELAB OSINT — autopilote
+  / _ \/ ___|_ _| \ | |_   _|
+ | | | \___ \| ||  \| | | |     osint                « Que savez-vous ? » (interactif)
+ | |_| |___) | || |\  | | |     osint auto <valeur>  numéro / e-mail / pseudo / nom / domaine
+  \___/|____/___|_| \_| |_|     osint auto "Nom" --relations   + famille / proches
+
+  L'autopilote détecte le type, enchaîne les outils, pivote sur ce qu'il trouve,
+  puis produit un GRAPHE d'entités et une AFFICHE (dossier une page) par personne.
+
+  Web        http://<ip>:8080            (osint web expose pour l'ouvrir au LAN)
+  Enquêtes   /opt/osint/cases            osint case list | dossier <id> | purge <id>
+  Outils     osint domain|username|email|phone|ip|person|relations
+  État       osint doctor        Màj  osint-update        SpiderFoot 127.0.0.1:5001
+
+  Cibles autorisées uniquement. Données personnelles = RGPD (base légale, purge).
+  Voir /opt/osint/src/docs/LEGAL.md

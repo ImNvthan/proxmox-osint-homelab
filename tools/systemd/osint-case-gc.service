@@ -1,0 +1,8 @@
+[Unit]
+Description=Purge des enquêtes OSINT expirées (RGPD : limitation de conservation)
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/osint/osint.env
+ExecStart=/usr/local/bin/osint-case-gc
+Nice=15

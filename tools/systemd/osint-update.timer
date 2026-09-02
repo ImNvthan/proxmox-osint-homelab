@@ -1,0 +1,10 @@
+[Unit]
+Description=Mise à jour hebdomadaire du homelab OSINT
+
+[Timer]
+OnCalendar=Sun 04:30
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

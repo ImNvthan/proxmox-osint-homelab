@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# osint-case-gc — purge des enquêtes plus vieilles que OSINT_CASE_TTL_DAYS
+# (0 = désactivé, défaut). Aide à la minimisation / limitation de conservation (RGPD).
+set -uo pipefail
+. /opt/osint/lib/common.sh 2>/dev/null || true
+
+TTL="${OSINT_CASE_TTL_DAYS:-0}"
+[[ "$TTL" =~ ^[0-9]+$ ]] || TTL=0
+if [[ "$TTL" -le 0 ]]; then
+  echo "OSINT_CASE_TTL_DAYS non défini (>0) — aucune purge automatique."
+  exit 0
+fi
+
+n=0
+while IFS= read -r d; do
+  [[ -d "$d" ]] || continue
+  rm -rf "$d" && { echo "purgé : $d"; n=$((n+1)); }
+done < <(find "${OSINT_CASES:-/opt/osint/cases}" -mindepth 1 -maxdepth 1 -type d -mtime "+${TTL}")
+echo "[osint-case-gc] $n enquête(s) purgée(s) (> ${TTL} j) — $(date -Is)"

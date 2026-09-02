@@ -1,0 +1,11 @@
+[Unit]
+Description=Moniteur OSINT planifié (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=PYTHONPATH=/opt/osint/lib
+EnvironmentFile=-/etc/osint/osint.env
+ExecStart=/usr/local/bin/osint-monitor run %i
+Nice=10

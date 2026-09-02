@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# osint-update — met à jour l'OS, tous les outils, le moteur python et ce dépôt.
+set -uo pipefail
+. /opt/osint/lib/common.sh 2>/dev/null || true
+[[ $(id -u) -eq 0 ]] || exec sudo -E "$0" "$@"
+
+GO=/usr/local/go/bin/go
+SRC=/opt/osint/src
+export PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin PATH="/usr/local/go/bin:/usr/local/bin:$PATH"
+
+echo "[*] apt"
+DEBIAN_FRONTEND=noninteractive apt-get -qq update && apt-get -qq -y upgrade || true
+
+echo "[*] outils pipx"
+pipx upgrade-all --include-injected 2>/dev/null || pipx upgrade-all || true
+
+if [[ -x "$GO" ]]; then
+  echo "[*] outils go"
+  for m in \
+    github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest \
+    github.com/projectdiscovery/httpx/cmd/httpx@latest \
+    github.com/projectdiscovery/dnsx/cmd/dnsx@latest \
+    github.com/projectdiscovery/katana/cmd/katana@latest \
+    github.com/lc/gau/v2/cmd/gau@latest \
+    github.com/sensepost/gowitness@latest \
+    github.com/gitleaks/gitleaks/v8@latest \
+    github.com/tomnomnom/assetfinder@latest ; do
+    echo "    - ${m%@*}"
+    GOBIN=/usr/local/bin GOFLAGS=-buildvcs=false "$GO" install "$m" 2>/dev/null || echo "      (ignoré)"
+  done
+fi
+
+if [[ -d /opt/spiderfoot/.git ]]; then
+  echo "[*] SpiderFoot"
+  git -C /opt/spiderfoot pull --ff-only 2>/dev/null || true
+  /opt/spiderfoot/.venv/bin/pip -q install --no-cache-dir -r /opt/spiderfoot/requirements.txt 2>/dev/null || true
+  chown -R spiderfoot:spiderfoot /opt/spiderfoot
+  systemctl restart spiderfoot.service 2>/dev/null || true
+fi
+
+if [[ -d "$SRC/.git" ]]; then
+  echo "[*] dépôt osint + CLI + moteur"
+  branch=$(git -C "$SRC" rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)
+  git -C "$SRC" fetch --depth 1 origin "$branch" 2>/dev/null && git -C "$SRC" reset --hard "origin/$branch" 2>/dev/null || true
+  install -m0755 "$SRC"/tools/bin/*         /usr/local/bin/ 2>/dev/null || true
+  install -m0644 "$SRC"/tools/lib/common.sh /opt/osint/lib/common.sh 2>/dev/null || true
+  rm -rf /opt/osint/lib/osintkit
+  cp -r "$SRC/tools/lib/osintkit" /opt/osint/lib/osintkit 2>/dev/null || true
+  install -m0644 "$SRC"/tools/systemd/*.service "$SRC"/tools/systemd/*.timer /etc/systemd/system/ 2>/dev/null || true
+  systemctl daemon-reload 2>/dev/null || true
+  systemctl restart osint-web.service 2>/dev/null || true
+fi
+
+echo "[+] mise à jour terminée — $(date -Is)"

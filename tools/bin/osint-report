@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+# osint-report <répertoire-exécution|latest>
+# Agrège un répertoire d'exécution en report.md + un report.html autonome.
+set -uo pipefail
+. /opt/osint/lib/common.sh
+
+sel="${1:-latest}"
+if [[ "$sel" == latest || "$sel" == dernier ]]; then
+  RUNDIR=$(ls -1dt "$OSINT_RUNS"/*/ "$OSINT_CASES"/*/runs/*/ 2>/dev/null | head -1); RUNDIR=${RUNDIR%/}
+else RUNDIR="${sel%/}"; [[ -d "$RUNDIR" ]] || RUNDIR="$OSINT_RUNS/$sel"; fi
+[[ -d "${RUNDIR:-}" ]] || die "aucune exécution : $sel"
+
+cd "$RUNDIR" || die "impossible d'entrer dans $RUNDIR"
+# shellcheck disable=SC1091
+source ./meta.env
+RAW="$RUNDIR/raw"
+MD="$RUNDIR/report.md"
+
+j() { jq -r "$1" "$2" 2>/dev/null; }
+cat_if() { [[ -s "$1" ]] && { echo '```'; sed -n "1,${2:-60}p" "$1"; echo '```'; } || echo "_aucune donnée_"; }
+have_out() { [[ -s "$RAW/$1" ]]; }
+
+{
+echo "# Rapport OSINT — ${target}"
+echo
+echo "| | |"
+echo "|---|---|"
+echo "| Type | \`${type}\` |"
+echo "| Cible | \`${target}\` |"
+echo "| Début | ${started} |"
+echo "| Fin | ${finished:-n/d} |"
+[[ -n "${caseid:-}" ]] && echo "| Enquête | \`${caseid}\` |"
+echo "| Répertoire | \`${RUNDIR}\` |"
+echo
+echo "## Étapes"
+echo
+echo "| étape | résultat | s | sortie |"
+echo "|---|---|---|---|"
+tail -n +2 manifest.tsv 2>/dev/null | while IFS=$'\t' read -r s rc sec out; do
+  case "$rc" in 0) r="✅ ok";; 124) r="⏱ délai";; *) r="⚠️ rc=$rc";; esac
+  echo "| $s | $r | $sec | $out |"
+done
+echo
+
+case "$type" in
+  domain)
+    echo "## Synthèse"
+    echo "- Noms d'hôtes : **$(wc -l <"$RAW/subs.txt" 2>/dev/null || echo 0)** · actifs : **$(wc -l <"$RAW/live.txt" 2>/dev/null || echo 0)** · IPs : **$(sort -u "$RAW/resolved.txt" 2>/dev/null | wc -l)**"
+    echo; echo "### Hôtes actifs"
+    if have_out httpx.jsonl; then
+      echo "| URL | code | titre | techno | IP |"; echo "|---|---|---|---|---|"
+      jq -r '[.url,(.status_code|tostring),(.title//""),((.tech//[])|join(", ")),(.host//.a[0]//"")]|@tsv' "$RAW/httpx.jsonl" 2>/dev/null \
+        | while IFS=$'\t' read -r u c t te ip; do echo "| $u | $c | ${t:0:50} | ${te:0:50} | $ip |"; done
+    else echo "_aucun_"; fi
+    echo; echo "### Sous-domaines"; cat_if "$RAW/subs.txt" 200
+    echo; echo "### DNS / DMARC"; cat_if "$RAW/dns.txt" 60; cat_if "$RAW/dmarc.txt" 40
+    echo; echo "### Typosquats"; cat_if "$RAW/dnstwist.json" 80
+    if [[ -d "$RUNDIR/screens" ]]; then
+      echo; echo "### Captures"
+      find "$RUNDIR/screens" -maxdepth 1 -type f \( -name '*.png' -o -name '*.jpeg' \) | sort | while read -r p; do echo "![$(basename "$p")](screens/$(basename "$p"))"; done
+    fi
+    [[ -s "$RAW/nmap.txt" ]] && { echo; echo "### nmap (actif)"; cat_if "$RAW/nmap.txt" 120; } ;;
+  username)
+    echo "## Résultats"
+    echo "### Sherlock"; cat_if "$RAW/sherlock.txt" 120
+    echo; echo "### Maigret"; [[ -f "$RUNDIR/maigret.html" ]] && echo "[Rapport HTML maigret](maigret.html)"; cat_if "$RAW/maigret.txt" 80
+    echo; echo "### socialscan"; cat_if "$RAW/socialscan.json" 60
+    echo; echo "### Dév"
+    echo "- GitHub : $(j '.html_url // .message' "$RAW/github.json")"
+    echo "- GitLab : $(j '.[0].web_url // "introuvable"' "$RAW/gitlab.json")"
+    echo "- Keybase : $(j '.them[0].basics.username // "introuvable"' "$RAW/keybase.json")" ;;
+  email)
+    echo "## Résultats"
+    echo "### holehe"; cat_if "$RAW/holehe.txt" 120
+    echo; echo "### socialscan"; cat_if "$RAW/socialscan.json" 50
+    echo; echo "### h8mail"; cat_if "$RAW/h8mail.json" 60
+    echo; echo "### Gravatar"; cat_if "$RAW/gravatar.json" 40
+    echo; echo "### Domaine de messagerie"; cat_if "$RAW/dmarc.txt" 30
+    [[ -s "$RAW/hibp.json" ]] && { echo; echo "### HIBP"; cat_if "$RAW/hibp.json" 100; } ;;
+  person)
+    echo "## Matière à pivot"
+    echo "### Pseudos"; cat_if "$RAW/usernames.txt" 40
+    echo; echo "### E-mails"; cat_if "$RAW/emails.txt" 60
+    echo; echo "### Dorks"; [[ -s "$RAW/dorks.md" ]] && sed -n '1,120p' "$RAW/dorks.md" || echo "_aucun_" ;;
+  relations)
+    echo "## Proches / famille (candidats NON vérifiés)"
+    if have_out relations.json; then
+      echo "| conf | lien | nom |"; echo "|---|---|---|"
+      jq -r '.relations[] | "| \(.confidence) | \(.relation) | \(.name) |"' "$RAW/relations.json" 2>/dev/null
+      echo; echo "### Profils repérés"; jq -r '.profiles[]' "$RAW/relations.json" 2>/dev/null | sed 's/^/- /'
+      echo; echo "> $(j '.disclaimer' "$RAW/relations.json")"
+    else echo "_aucune donnée_"; fi ;;
+  phone)
+    echo "## Résultats"
+    echo "### Analyse E.164"; cat_if "$RAW/phone-parse.json" 30
+    echo; echo "### phoneinfoga"; cat_if "$RAW/phoneinfoga.txt" 120
+    for f in "$RAW"/ignorant_*.txt; do [[ -s "$f" ]] && { echo; echo "### ignorant ($(basename "$f"))"; cat_if "$f" 30; }; done ;;
+  ip)
+    echo "## Résultats"
+    echo "### ASN"; cat_if "$RAW/asn.json" 25
+    echo; echo "### Géo"; cat_if "$RAW/geo.json" 25
+    echo; echo "### DNS inverse"; cat_if "$RAW/rdns.txt" 15
+    echo; echo "### Shodan InternetDB"; cat_if "$RAW/shodan.json" 60
+    [[ -s "$RAW/nmap.txt" ]] && { echo; echo "### nmap (actif)"; cat_if "$RAW/nmap.txt" 150; } ;;
+esac
+
+echo; echo "---"
+echo "_Généré le $(date -Is) par osint-report. Sortie brute dans \`raw/\`, sélecteurs dans \`selectors.jsonl\`._"
+} >"$MD"
+
+HTML="$RUNDIR/report.html"
+if have pandoc; then
+  pandoc "$MD" -f gfm -s --metadata title="OSINT — ${target}" --embed-resources -o "$HTML" 2>/dev/null \
+    || pandoc "$MD" -f gfm -s -o "$HTML" 2>/dev/null || true
+fi
+if [[ ! -s "$HTML" ]]; then
+  {
+    echo "<!doctype html><meta charset=utf-8><title>OSINT — ${target}</title>"
+    echo "<style>body{font:15px/1.5 system-ui,sans-serif;max-width:1000px;margin:2rem auto;padding:0 1rem;background:#0f1115;color:#d7dae0}h1,h2,h3{color:#7fd1ff}table{border-collapse:collapse}td,th{border:1px solid #333;padding:4px 8px}pre{background:#1b1f27;padding:10px;overflow:auto;border-radius:6px}img{max-width:100%;border:1px solid #333}a{color:#7fd1ff}code{color:#ffd479}</style>"
+    echo "<pre>"; sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g' "$MD"; echo "</pre>"
+  } >"$HTML"
+fi
+echo "$MD"; echo "$HTML"

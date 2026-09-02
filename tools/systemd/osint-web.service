@@ -1,0 +1,17 @@
+[Unit]
+Description=Interface web du homelab OSINT (saisie -> autopilote)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=PYTHONPATH=/opt/osint/lib
+Environment=OSINT_CASES=/opt/osint/cases
+EnvironmentFile=-/etc/osint/osint.env
+ExecStart=/usr/bin/python3 -m osintkit.web --host 127.0.0.1 --port 8080 --runs /opt/osint/cases
+Restart=on-failure
+RestartSec=3
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

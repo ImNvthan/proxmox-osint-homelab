@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# osint-recon-email <adresse>
+# Empreinte d'inscription à des comptes + exposition pour une adresse e-mail (passif).
+set -uo pipefail
+. /opt/osint/lib/common.sh
+
+TARGET="${1:-}"; require_target "$TARGET"
+[[ "$TARGET" == *@*.* ]] || die "ce n'est pas une adresse e-mail : $TARGET"
+DOMAIN="${TARGET#*@}"
+RUNDIR="$(new_run email "$TARGET")"
+cd "$RUNDIR/raw" || die "impossible d'entrer dans le répertoire d'exécution"
+log "empreinte e-mail → $TARGET"
+
+have holehe && run holehe holehe.txt -- holehe --only-used --no-color "$TARGET"
+have socialscan && run socialscan socialscan.json -- socialscan "$TARGET" --json "$RUNDIR/raw/socialscan.json"
+have h8mail && run h8mail h8mail.json -- h8mail -t "$TARGET" -j "$RUNDIR/raw/h8mail.json" --loose
+
+# Gravatar : hash + profil JSON (exploité par osintkit.extract)
+MD5=$(printf '%s' "$(echo "$TARGET" | tr 'A-Z' 'a-z' | xargs)" | md5sum | cut -d' ' -f1)
+run_sh gravatar-http gravatar.txt \
+  "code=\$(curl -s -o /dev/null -w '%{http_code}' 'https://www.gravatar.com/avatar/$MD5?d=404'); \
+   echo \"hash gravatar : $MD5\"; echo \"http : \$code (\$([ \$code = 200 ] && echo EXISTE || echo aucun))\""
+run_sh gravatar-json gravatar.json "oget 'https://www.gravatar.com/$MD5.json'"
+
+# GHunt (si session Google configurée dans ~/.malfrats/ghunt / creds)
+if have ghunt; then
+  run_sh ghunt ghunt.json "ghunt email '$TARGET' --json '$RUNDIR/raw/ghunt.json' 2>/dev/null || echo 'ghunt : cookies Google requis'"
+fi
+
+run_sh dmarc-spf dmarc.txt \
+  "echo '== MX =='; dig +short MX $DOMAIN; echo '== SPF =='; dig +short TXT $DOMAIN | grep -i spf1; \
+   echo '== DMARC =='; dig +short TXT _dmarc.$DOMAIN"
+have checkdmarc && run checkdmarc checkdmarc.json -- checkdmarc -f json -o "$RUNDIR/raw/checkdmarc.json" "$DOMAIN"
+
+if [[ -n "${HIBP_API_KEY:-}" ]]; then
+  run_sh hibp hibp.json \
+    "curl -fsS -H 'hibp-api-key: $HIBP_API_KEY' -A osint-lxc \
+      'https://haveibeenpwned.com/api/v3/breachedaccount/$TARGET?truncateResponse=false'"
+else
+  echo "HIBP_API_KEY non définie — Have I Been Pwned ignoré." >hibp.skipped
+fi
+[[ -n "${HUNTER_API_KEY:-}" ]] && run_sh hunter hunter.json \
+  "oget 'https://api.hunter.io/v2/email-verifier?email=$TARGET&api_key=$HUNTER_API_KEY'"
+
+finish_run

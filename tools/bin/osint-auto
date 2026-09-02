@@ -1,0 +1,191 @@
+#!/usr/bin/env bash
+# osint-auto <valeur> [options] — AUTOPILOTE.
+# Détecte le type du sélecteur, enchaîne les pipelines, pivote sur les nouveaux
+# sélecteurs trouvés (largeur d'abord, profondeur + budget bornés), construit le
+# graphe d'entités puis l'affiche (dossier une page) par personne.
+#
+#   osint auto "+33612345678"
+#   osint auto jean.dupont@gmail.com --relations
+#   osint auto "Jean Dupont" --ville Lyon --relations --depth 2
+#
+# Options :
+#   --relations            active la recherche famille/proches (garde-fou RGPD)
+#   --depth N              profondeur de pivot max          (déf. $OSINT_AUTO_MAX_DEPTH)
+#   --nodes N              budget d'entités à explorer      (déf. $OSINT_AUTO_MAX_NODES)
+#   --min-conf X           seuil de confiance pour pivoter  (déf. $OSINT_AUTO_MIN_CONF)
+#   --case NOM             nom d'enquête (déf. auto-daté)
+#   --ville / --entreprise contexte transmis à person/relations
+#   --yes                  pas de confirmation interactive
+#   --pdf                  génère aussi le dossier en PDF
+set -uo pipefail
+. /opt/osint/lib/common.sh
+
+SEED_RAW=""; DO_REL=0; DEPTH="$OSINT_AUTO_MAX_DEPTH"; BUDGET="$OSINT_AUTO_MAX_NODES"
+MINCONF="$OSINT_AUTO_MIN_CONF"; CASE_NAME=""; CITY=""; COMPANY=""; WANT_PDF=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --relations|--proches) DO_REL=1; shift ;;
+    --depth|--profondeur)   DEPTH="$2"; shift 2 ;;
+    --nodes|--budget)       BUDGET="$2"; shift 2 ;;
+    --min-conf)             MINCONF="$2"; shift 2 ;;
+    --case|--enquete)       CASE_NAME="$2"; shift 2 ;;
+    --ville|--city)         CITY="$2"; shift 2 ;;
+    --entreprise|--company) COMPANY="$2"; shift 2 ;;
+    --yes|-y)               OSINT_ASSUME_YES=1; shift ;;
+    --pdf)                  WANT_PDF=1; shift ;;
+    -h|--help)              sed -n '2,30p' "$0"; exit 0 ;;
+    -*) warn "option inconnue ignorée : $1"; shift ;;
+    *)  SEED_RAW="${SEED_RAW:+$SEED_RAW }$1"; shift ;;
+  esac
+done
+require_target "$SEED_RAW"
+export OSINT_ASSUME_YES
+
+have jq || die "jq requis"
+"$OSINT_PY" -c "import osintkit" 2>/dev/null || die "osintkit introuvable — PYTHONPATH=$PYTHONPATH"
+
+# ---- classification du point de départ --------------------------------
+read -r KIND VALUE < <(classify "$SEED_RAW" "$OSINT_REGION")
+[[ -n "${KIND:-}" && "$KIND" != "unknown" ]] || die "impossible de classer « $SEED_RAW » — précisez (osint email …, osint phone …, osint person …)."
+log "point de départ : ${C_G}${KIND}${C_0} = ${VALUE}"
+
+case "$KIND" in
+  email|phone|username|person) confirm_personal "$KIND = $VALUE" ;;
+esac
+if [[ $DO_REL -eq 1 ]]; then
+  OSINT_ALLOW_RELATIONS=1; export OSINT_ALLOW_RELATIONS
+  warn "recherche famille/proches ACTIVÉE — vous traitez des données sur des TIERS."
+  warn "RGPD : base légale + minimisation + purge obligatoires (docs/LEGAL.md)."
+  confirm_personal "proches de : $VALUE"
+fi
+
+# ---- enquête ---------------------------------------------------------
+OSINT_CASE="${CASE_NAME:-case_$(date +%Y%m%d-%H%M%S)_$(tr -dc a-z0-9 </dev/urandom | head -c4)}"
+export OSINT_CASE
+CDIR="$OSINT_CASES/$OSINT_CASE"
+mkdir -p "$CDIR/runs"
+: >"$CDIR/engine.log"
+case_status "démarrage ($KIND)"
+log "enquête : ${C_B}${OSINT_CASE}${C_0}  →  $CDIR"
+
+# graphe : nœud de départ
+"$OSINT_PY" - "$CDIR" "$KIND" "$VALUE" <<'PY' 2>>"$CDIR/engine.log"
+import sys
+from osintkit.graph import Graph
+g = Graph.load(sys.argv[1]); g.set_seed(sys.argv[2], sys.argv[3]); g.save()
+PY
+
+# ---- file de travail (BFS) -----------------------------------------
+QUEUE=$(mktemp); VISITED=$(mktemp)
+trap 'rm -f "$QUEUE" "$VISITED"' EXIT
+printf '%s\t%s\t%s\n' "$KIND" "$VALUE" 0 >"$QUEUE"
+EXPLORED=0
+
+seen() { grep -qiFx "$1"$'\t'"$2" "$VISITED"; }
+mark() { printf '%s\t%s\n' "$1" "$2" >>"$VISITED"; }
+
+# nœud d'ancrage d'une exécution : ce qu'on a recherché (les sélecteurs trouvés
+# s'y rattachent ; une personne découverte devient ensuite le hub).
+anchor_for() {
+  "$OSINT_PY" - "$1" "$2" <<'PY'
+import sys
+from osintkit.graph import node_id
+k, v = sys.argv[1], sys.argv[2]
+kind = {"person": "person", "email": "email", "phone": "phone",
+        "username": "username", "domain": "domain", "ip": "ip"}.get(k)
+print(node_id(kind, v) if kind else "")
+PY
+}
+
+# enqueue_from_run <rundir> <profondeur-actuelle> : met en file les sélecteurs
+# exploitables (confiance >= MINCONF) trouvés dans une exécution, à profondeur+1.
+enqueue_from_run() {
+  local rundir="$1" d="$2"
+  [[ -s "$rundir/selectors.jsonl" ]] || return 0
+  while IFS=$'\t' read -r nk nv; do
+    [[ -n "$nk" && -n "$nv" ]] || continue
+    seen "$nk" "$nv" && continue
+    grep -qiFx "$nk"$'\t'"$nv" "$QUEUE" 2>/dev/null && continue
+    printf '%s\t%s\t%s\n' "$nk" "$nv" "$((d+1))" >>"$QUEUE"
+    log "   + pivot : $nk = $nv"
+  done < <(
+    jq -r --argjson mc "$MINCONF" '
+      select(.confidence >= $mc) |
+      if   .kind=="email"       then "email\t"+(.value|ascii_downcase)
+      elif .kind=="phone"       then "phone\t"+.value
+      elif .kind=="username"    then "username\t"+.value
+      elif .kind=="person_name" then "person\t"+.value
+      elif .kind=="account" and (.value|test("/"))
+                                then "username\t"+(.value|sub(".*/";""))
+      else empty end
+    ' "$rundir/selectors.jsonl" 2>/dev/null | sort -u
+  )
+}
+
+# ---- boucle principale -------------------------------------------
+while :; do
+  line=$(head -n1 "$QUEUE"); [[ -n "$line" ]] || break
+  sed -i '1d' "$QUEUE"
+  IFS=$'\t' read -r k v d <<<"$line"
+  [[ -n "$k" && -n "$v" ]] || continue
+  seen "$k" "$v" && continue
+  mark "$k" "$v"
+  EXPLORED=$((EXPLORED+1))
+  (( EXPLORED > BUDGET )) && { warn "budget d'entités atteint ($BUDGET) — arrêt de l'exploration"; break; }
+
+  case_status "exploration $EXPLORED/$BUDGET : $k=$v (profondeur $d)"
+  log "── [$EXPLORED] $k = $v   (profondeur $d/$DEPTH)"
+
+  OSINT_ANCHOR="$(anchor_for "$k" "$v")"; export OSINT_ANCHOR
+  rc=0
+  case "$k" in
+    email)    osint-recon-email    "$v"            >>"$CDIR/engine.log" 2>&1 || rc=$? ;;
+    phone)    osint-recon-phone    "$v"            >>"$CDIR/engine.log" 2>&1 || rc=$? ;;
+    username) osint-recon-username "$v"            >>"$CDIR/engine.log" 2>&1 || rc=$? ;;
+    domain)   osint-recon-domain   "$v"            >>"$CDIR/engine.log" 2>&1 || rc=$? ;;
+    ip)       osint-recon-ip       "$v"            >>"$CDIR/engine.log" 2>&1 || rc=$? ;;
+    person)
+      pargs=("$v"); [[ -n "$COMPANY" ]] && pargs+=(--company "$COMPANY")
+      [[ -n "$CITY" ]] && pargs+=(--city "$CITY")
+      osint-recon-person "${pargs[@]}" >>"$CDIR/engine.log" 2>&1 || rc=$?
+      if [[ $DO_REL -eq 1 && "$d" -lt "$DEPTH" ]]; then
+        rargs=("$v"); [[ -n "$CITY" ]] && rargs+=(--ville "$CITY")
+        [[ -n "$COMPANY" ]] && rargs+=(--entreprise "$COMPANY")
+        osint-recon-relations "${rargs[@]}" >>"$CDIR/engine.log" 2>&1 || true
+        relrun=$(ls -1dt "$CDIR/runs/relations_"* 2>/dev/null | head -1)
+        [[ -n "$relrun" ]] && enqueue_from_run "$relrun" "$d"
+      fi ;;
+    account)
+      # account "plateforme/handle" -> pivote en pseudo
+      handle="${v#*/}"
+      [[ -n "$handle" && "$handle" != "$v" ]] && printf '%s\t%s\t%s\n' username "$handle" "$d" >>"$QUEUE"
+      unset OSINT_ANCHOR; continue ;;
+    *) unset OSINT_ANCHOR; continue ;;
+  esac
+  unset OSINT_ANCHOR
+  [[ $rc -ne 0 ]] && warn "$k $v : pipeline rc=$rc (voir engine.log)"
+
+  # ---- frontière : nouveaux sélecteurs à pivoter -----------------
+  (( d >= DEPTH )) && { log "profondeur max — pas de pivot depuis ce nœud"; continue; }
+  newrun=$(ls -1dt "$CDIR/runs/${k}_"* 2>/dev/null | head -1)
+  [[ -n "$newrun" ]] && enqueue_from_run "$newrun" "$d"
+done
+
+# ---- consolidation : graphe + affiche ---------------------------
+case_status "consolidation (graphe + dossier)"
+log "rendu du graphe d'entités…"
+"$OSINT_PY" -m osintkit.graph render "$CDIR"   >>"$CDIR/engine.log" 2>&1 || warn "rendu graphe en échec"
+log "rendu de l'affiche / dossier…"
+dargs=("$CDIR"); [[ $WANT_PDF -eq 1 ]] && dargs+=(--pdf)
+"$OSINT_PY" -m osintkit.dossier "${dargs[@]}" >>"$CDIR/engine.log" 2>&1 || warn "rendu dossier en échec"
+
+case_status "terminé"
+IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+echo
+ok  "enquête terminée : ${C_B}${OSINT_CASE}${C_0}   ($EXPLORED entités explorées)"
+echo -e "   dossier  : ${CDIR}/dossier.html"
+echo -e "   graphe   : ${CDIR}/graph.html   ·   graph.json (Maltego/Gephi)"
+echo -e "   par pers.: ${CDIR}/entities/<nom>/dossier.html"
+echo -e "   web      : http://${IP:-<ip-lxc>}:${OSINT_WEB_PORT}/case/${OSINT_CASE}"
+echo -e "   purge    : osint case purge ${OSINT_CASE}"
+echo "$CDIR"

@@ -1,0 +1,10 @@
+[Unit]
+Description=Mise à jour du homelab OSINT (OS, pipx, Go, SpiderFoot, moteur, dépôt)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/osint-update
+Nice=10
+IOSchedulingClass=idle

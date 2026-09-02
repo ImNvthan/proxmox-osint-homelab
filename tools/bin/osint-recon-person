@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# osint-recon-person "Prénom Nom" [--company acme.com] [--city Paris] [--deep]
+# Transforme un nom réel en matière à pivot : permutations pseudos/e-mails,
+# dorks de moteurs de recherche, récolte entreprise, (option) balayage complet.
+set -uo pipefail
+. /opt/osint/lib/common.sh
+
+NAME=""; COMPANY=""; CITY=""; DEEP=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --company|--entreprise) COMPANY="$2"; shift 2 ;;
+    --city|--ville)         CITY="$2"; shift 2 ;;
+    --deep|--profond)       DEEP=1; shift ;;
+    *) NAME="${NAME:+$NAME }$1"; shift ;;
+  esac
+done
+require_target "$NAME"
+
+RUNDIR="$(new_run person "$NAME")"
+cd "$RUNDIR/raw" || die "impossible d'entrer dans le répertoire d'exécution"
+log "pivot sur une personne → $NAME  ${COMPANY:+(entreprise $COMPANY)} ${CITY:+(ville $CITY)}"
+
+# Permutations pseudos + e-mails via osintkit.normalize
+export OSINT_NAME="$NAME" OSINT_COMPANY="${COMPANY:-}"
+run_sh permutations permutations.json \
+  "$OSINT_PY - <<'PY'
+import json, os
+from osintkit.normalize import split_name, username_permutations, email_permutations
+name = os.environ.get('OSINT_NAME', ''); company = os.environ.get('OSINT_COMPANY', '')
+f, l = split_name(name)
+doms = ['gmail.com','outlook.com','proton.me','yahoo.fr','free.fr','orange.fr']
+if company: doms = [company] + doms
+u = username_permutations(f, l); e = email_permutations(f, l, doms)
+open('usernames.txt','w').write('\n'.join(u) + '\n')
+open('emails.txt','w').write('\n'.join(e) + '\n')
+print(json.dumps({'first': f, 'last': l, 'usernames': u, 'emails': e}, ensure_ascii=False, indent=2))
+PY"
+ok "$(wc -l <usernames.txt 2>/dev/null || echo 0) pseudos · $(wc -l <emails.txt 2>/dev/null || echo 0) e-mails candidats"
+
+q="\"$NAME\""
+cat >dorks.md <<EOF
+# Dorks de recherche pour ${NAME}
+
+## Professionnel / identité
+- ${q} site:linkedin.com/in
+- ${q} site:viadeo.com OR site:xing.com
+- ${q} ${COMPANY:+\"$COMPANY\"} (cv OR résumé OR "curriculum vitae") filetype:pdf
+- ${q} (profil OR bio OR "à propos" OR "née")
+
+## Réseaux sociaux
+- ${q} (site:twitter.com OR site:x.com OR site:instagram.com OR site:facebook.com OR site:tiktok.com OR site:threads.net)
+- ${q} site:github.com
+- ${q} (site:reddit.com OR site:copainsdavant.linternaute.com OR site:trombi.com)
+
+## Famille / entourage
+- ${q}${CITY:+ \"$CITY\"} (famille OR épouse OR mari OR fils OR fille OR parents)
+- ${q} ("avis de décès" OR obsèques OR hommage OR "toutes nos condoléances")
+
+## Documents & fuites
+- ${q} (filetype:pdf OR filetype:docx OR filetype:xlsx)
+- ${q}${CITY:+ \"$CITY\"} (adresse OR téléphone OR email OR "demeurant")
+- ${q} site:pastebin.com
+
+## Images
+- Image inversée sur toute photo : images.google.com · yandex.com/images · tineye.com · pimeyes.com
+EOF
+ok "dorks → $RUNDIR/raw/dorks.md"
+
+if [[ -n "$COMPANY" ]] && have theHarvester; then
+  run theHarvester theharvester.json -- \
+    theHarvester -d "$COMPANY" -b "crtsh,duckduckgo,otx,rapiddns,hackertarget,anubis" -f "$RUNDIR/raw/theharvester"
+fi
+
+if [[ $DEEP -eq 1 ]]; then
+  while read -r u; do
+    [[ -z "$u" ]] && continue
+    log "  approfondi : pseudo $u"
+    osint-recon-username "$u" >>"$RUNDIR/logs/deep.log" 2>&1 || true
+  done < <(head -n 6 usernames.txt)
+fi
+
+finish_run

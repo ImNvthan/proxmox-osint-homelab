@@ -1,0 +1,235 @@
+#!/usr/bin/env bash
+# osint — porte d'entrée du LXC OSINT v2 (autopilote + boîte à outils).
+# Licence : MIT
+set -uo pipefail
+LIB=/opt/osint/lib/common.sh
+[[ -f "$LIB" ]] && . "$LIB" || { echo "common.sh manquant — réinstallez"; exit 1; }
+
+VERSION="2.0.0"
+
+usage() {
+cat <<EOF
+osint ${VERSION} — renseignement en sources ouvertes, automatisé
+
+AUTOPILOTE  (le plus simple : donnez ce que vous savez, il cherche seul)
+  osint auto <valeur> [--relations] [--depth N] [--case NOM] [--yes]
+      <valeur> = numéro | e-mail | pseudo | "Prénom Nom" | domaine | IP | URL
+      Détecte le type, enchaîne les pipelines, pivote sur ce qu'il trouve,
+      construit un graphe d'entités et une AFFICHE (dossier une page) par
+      personne — famille/proches inclus avec --relations.
+  osint            (sans argument)  invite interactive « Que savez-vous ? »
+
+PIPELINES UNITAIRES        (résultats : ${OSINT_RUNS}/<exec>/report.html)
+  domain   <domaine>       DNS, sous-domaines, hôtes actifs, captures, wayback, DMARC
+  username <pseudo>        sherlock + maigret + socialscan + dev
+  email    <adresse>       holehe + socialscan + h8mail + gravatar + DMARC
+  person   "Prénom Nom"    permutations pseudos/e-mails + dorks (+ --deep)
+  phone    <+e164>         phoneinfoga + ignorant + parse E.164
+  ip       <ip|cidr>       whois/ASN, DNS inverse, Shodan InternetDB, GreyNoise
+  relations "Prénom Nom"   proches/famille via sources publiques  (garde-fou RGPD)
+
+ENQUÊTES
+  case list | show <id> | open <id> | purge <id> | dossier <id> | graph <id>
+  web [expose|local|status]   interface « une boîte de saisie » (défaut 127.0.0.1:${OSINT_WEB_PORT})
+  dossier <id|latest> [--pdf]  (re)génère l'affiche
+  graph   <id|latest>          (re)génère le graphe d'entités
+
+GESTION
+  tui · list · show <exec|latest> · serve [port] · report <exec>
+  spiderfoot [status|expose|local|scan C] · doctor · update · version
+
+  --active sur domain/ip : ajoute un scan de ports nmap (cibles AUTORISÉES).
+  L'autopilote reste toujours passif.
+
+N'investiguez que des cibles autorisées. Données personnelles : voir /opt/osint/src/docs/LEGAL.md
+EOF
+}
+
+cmd="${1:-}"; [[ $# -gt 0 ]] && shift || true
+
+case "$cmd" in
+  auto|a|autopilot|autopilote) exec osint-auto "$@" ;;
+  domain)   exec osint-recon-domain    "$@" ;;
+  username) exec osint-recon-username   "$@" ;;
+  email)    exec osint-recon-email      "$@" ;;
+  person)   exec osint-recon-person     "$@" ;;
+  ip)       exec osint-recon-ip         "$@" ;;
+  phone)    exec osint-recon-phone      "$@" ;;
+  relations|proches) exec osint-recon-relations "$@" ;;
+  report)   exec osint-report           "$@" ;;
+  update)   exec osint-update           "$@" ;;
+  monitor)  exec osint-monitor          "$@" ;;
+  version|-V|--version) echo "osint ${VERSION}" ;;
+  -h|--help|help|aide) usage ;;
+
+  "")
+    if [[ -t 0 && -t 1 ]]; then
+      echo "LXC OSINT ${VERSION} — autopilote"
+      read -r -p "Que savez-vous ? (numéro / e-mail / pseudo / nom / domaine) : " q
+      [[ -n "${q:-}" ]] || { usage; exit 0; }
+      rel=""
+      read -r -p "Chercher aussi la famille/les proches ? [o/N] " a
+      [[ "$a" =~ ^[oOyY]$ ]] && rel="--relations"
+      exec osint-auto "$q" $rel
+    else
+      usage
+    fi ;;
+
+  dossier)
+    sel="${1:-latest}"; shift || true
+    cdir="$OSINT_CASES/$sel"
+    [[ "$sel" == latest || "$sel" == dernier ]] && cdir=$(ls -1dt "$OSINT_CASES"/*/ 2>/dev/null | head -1)
+    cdir="${cdir%/}"
+    [[ -d "$cdir" ]] || die "aucune enquête : $sel"
+    "$OSINT_PY" -m osintkit.dossier "$cdir" "$@" ;;
+
+  graph)
+    sel="${1:-latest}"
+    cdir="$OSINT_CASES/$sel"
+    [[ "$sel" == latest || "$sel" == dernier ]] && cdir=$(ls -1dt "$OSINT_CASES"/*/ 2>/dev/null | head -1)
+    cdir="${cdir%/}"
+    [[ -d "$cdir" ]] || die "aucune enquête : $sel"
+    "$OSINT_PY" -m osintkit.graph render "$cdir" ;;
+
+  case|enquete|enquête)
+    sub="${1:-list}"; shift || true
+    case "$sub" in
+      list|liste)
+        ls -1dt "$OSINT_CASES"/*/ 2>/dev/null | while read -r d; do
+          d=${d%/}; n=$(basename "$d")
+          seed=$("$OSINT_PY" - "$d" <<'PY' 2>/dev/null || true
+import json,sys,os
+p=os.path.join(sys.argv[1],"graph.json")
+try:
+  g=json.load(open(p));s=g.get("seed") or {}
+  print(f'{s.get("kind","?")}={s.get("value","")}  ({len(g.get("nodes",[]))} entités)')
+except Exception: print("")
+PY
+)
+          printf '%-26s %s\n' "$n" "$seed"
+        done ;;
+      show|voir)
+        d="$OSINT_CASES/${1:?usage: osint case show <id>}"; [[ -d "$d" ]] || die "inconnu"
+        "$OSINT_PY" -m osintkit.graph show "$d" ;;
+      open|ouvrir)
+        d="$OSINT_CASES/${1:?usage: osint case open <id>}"; [[ -d "$d" ]] || die "inconnu"
+        ip=$(hostname -I | awk '{print $1}')
+        echo "dossier : file://$d/dossier.html"
+        echo "via web : http://${ip}:${OSINT_WEB_PORT}/case/$(basename "$d")" ;;
+      dossier)  exec osint dossier "${1:?id}" ;;
+      graph)    exec osint graph "${1:?id}" ;;
+      purge|supprimer)
+        d="$OSINT_CASES/${1:?usage: osint case purge <id>}"; [[ -d "$d" ]] || die "inconnu"
+        read -r -p "Supprimer définitivement $d ? [o/N] " a
+        [[ "$a" =~ ^[oOyY]$ ]] && { rm -rf "$d" && ok "purgé (RGPD : effacement)"; } || echo "annulé" ;;
+      *) echo "usage : osint case [list|show <id>|open <id>|dossier <id>|graph <id>|purge <id>]" ;;
+    esac ;;
+
+  web)
+    sub="${1:-status}"; shift || true
+    UNIT=/etc/systemd/system/osint-web.service
+    as_root() { if [[ $EUID -eq 0 ]]; then "$@"; elif have sudo; then sudo "$@"; else die "à lancer en root"; fi; }
+    case "$sub" in
+      start|fg)
+        exec "$OSINT_PY" -m osintkit.web --host "${1:-127.0.0.1}" --port "$OSINT_WEB_PORT" --runs "$OSINT_CASES" ;;
+      expose|ouvrir)
+        as_root sed -i -E 's#(--host )[0-9.]+#\10.0.0.0#' "$UNIT" 2>/dev/null || true
+        as_root systemctl daemon-reload; as_root systemctl restart osint-web.service
+        ip=$(hostname -I | awk '{print $1}')
+        ok "interface web → http://${ip}:${OSINT_WEB_PORT}  (aucune auth par défaut — LAN de confiance ; posez OSINT_WEB_USER/PASS)" ;;
+      local|fermer)
+        as_root sed -i -E 's#(--host )[0-9.]+#\1127.0.0.1#' "$UNIT" 2>/dev/null || true
+        as_root systemctl daemon-reload; as_root systemctl restart osint-web.service
+        ok "interface web ramenée sur 127.0.0.1:${OSINT_WEB_PORT}" ;;
+      status|etat)
+        systemctl --no-pager --lines=0 status osint-web.service 2>/dev/null | sed -n '1,4p' || true
+        grep -oP -- '--host \K[0-9.]+' "$UNIT" 2>/dev/null | sed 's/^/écoute : /' || true ;;
+      *) echo "usage : osint web [start|expose|local|status]" ;;
+    esac ;;
+
+  list|liste)
+    ls -1dt "$OSINT_RUNS"/*/ 2>/dev/null | while read -r d; do
+      d=${d%/}; printf '%s  %s\n' "$(basename "$d")" "$(grep -h '^target=' "$d/meta.env" 2>/dev/null | cut -d= -f2-)"
+    done ;;
+
+  show|voir)
+    sel="${1:-latest}"
+    if [[ "$sel" == latest || "$sel" == dernier ]]; then dir=$(ls -1dt "$OSINT_RUNS"/*/ 2>/dev/null | head -1)
+    else dir="$OSINT_RUNS/$sel"; fi
+    [[ -d "${dir:-}" ]] || die "aucune exécution : $sel"
+    dir=${dir%/}
+    cat "$dir/meta.env"; echo; echo "rapport : $dir/report.html"
+    [[ -f "$dir/report.md" ]] && { echo; sed -n '1,40p' "$dir/report.md"; } ;;
+
+  serve)
+    port="${1:-$OSINT_HTTP_PORT}"
+    root="$OSINT_HOME"
+    cd "$root" || die "pas de répertoire"
+    ip=$(hostname -I | awk '{print $1}')
+    log "service de ${root} sur http://${ip}:${port}  (runs/ et cases/ — Ctrl-C pour arrêter)"
+    exec python3 -m http.server "$port" --bind 0.0.0.0 ;;
+
+  spiderfoot)
+    sub="${1:-status}"
+    UNIT=/etc/systemd/system/spiderfoot.service
+    as_root() { if [[ $EUID -eq 0 ]]; then "$@"; elif have sudo; then sudo "$@"; else die "à lancer en root"; fi; }
+    bind=$(grep -oP -- '-l \K[0-9.:]+' "$UNIT" 2>/dev/null || echo 127.0.0.1:5001)
+    port="${bind##*:}"; [[ "$port" == "$bind" ]] && port=5001
+    curl_host="${bind%:*}"; [[ "$curl_host" == "0.0.0.0" || -z "$curl_host" ]] && curl_host=127.0.0.1
+    case "$sub" in
+      status|etat)
+        systemctl --no-pager --lines=0 status spiderfoot.service | sed -n '1,4p'
+        echo "écoute sur : ${bind}"
+        ss -tlnH "sport = :${port}" 2>/dev/null | grep -q . && echo "port ${port} : OUVERT" || echo "port ${port} : fermé" ;;
+      expose|ouvrir)
+        as_root sed -i -E 's#(-l )[0-9.]+(:[0-9]+)#\10.0.0.0\2#' "$UNIT"
+        as_root systemctl daemon-reload; as_root systemctl restart spiderfoot.service; sleep 2
+        ip=$(hostname -I | awk '{print $1}')
+        ss -tlnH "sport = :${port}" 2>/dev/null | grep -q '0.0.0.0' \
+          && ok "SpiderFoot → http://${ip}:${port} (sans auth — LAN uniquement)" \
+          || die "échec — journalctl -u spiderfoot -n 40" ;;
+      local|fermer)
+        as_root sed -i -E 's#(-l )[0-9.]+(:[0-9]+)#\1127.0.0.1\2#' "$UNIT"
+        as_root systemctl daemon-reload; as_root systemctl restart spiderfoot.service
+        ok "SpiderFoot ramené sur 127.0.0.1:${port}" ;;
+      scan)
+        t="${2:?osint spiderfoot scan <cible>}"
+        curl -fsS "http://${curl_host}:${port}/startscan" --data-urlencode "scanname=${t}" \
+             --data-urlencode "scantarget=${t}" --data "usecase=all" --data "modulelist=" --data "typelist=" >/dev/null \
+          && ok "scan « ${t} » mis en file" || die "API SpiderFoot injoignable sur ${curl_host}:${port}" ;;
+      *) echo "usage : osint spiderfoot [status|expose|local|scan <cible>]" ;;
+    esac ;;
+
+  tui|menu)
+    have whiptail || die "whiptail non installé"
+    q=$(whiptail --title "LXC OSINT" --inputbox "Que savez-vous ? (numéro / e-mail / pseudo / nom / domaine)" 9 68 3>&1 1>&2 2>&3) || exit 0
+    [[ -n "${q:-}" ]] || exit 0
+    rel=""
+    whiptail --title "Famille / proches" --yesno "Chercher aussi la famille et les proches ?\n(Tiers — base légale RGPD requise.)" 9 62 --defaultno && rel="--relations"
+    clear; exec osint-auto "$q" $rel ;;
+
+  doctor|docteur)
+    echo "── binaires ──────────────────────────────"
+    for t in curl jq whois dig nmap tor torsocks chromium exiftool tesseract dot \
+             subfinder httpx dnsx katana gau gowitness assetfinder amass gitleaks \
+             theHarvester holehe maigret socialscan sherlock blackbird dnstwist checkdmarc h8mail \
+             waymore recon-ng ignorant toutatis xeuledoc ghunt phoneinfoga whatweb dnsrecon; do
+      if have "$t"; then printf '  \033[1;92m✔\033[m %-14s %s\n' "$t" "$("$t" --version 2>/dev/null | head -1 | cut -c1-40)"
+      else printf '  \033[31mx\033[m %-14s absent\n' "$t"; fi
+    done
+    echo "── moteur python ─────────────────────────"
+    for mod in jinja2 flask phonenumbers bs4 requests networkx; do
+      "$OSINT_PY" -c "import $mod" 2>/dev/null && printf '  \033[1;92m✔\033[m %s\n' "$mod" || printf '  \033[31mx\033[m %s (pip/apt manquant)\n' "$mod"
+    done
+    "$OSINT_PY" -m osintkit.classify test >/dev/null 2>&1 && echo "  ✔ osintkit importable" || echo "  x osintkit KO"
+    echo "── services ──────────────────────────────"
+    systemctl is-active spiderfoot.service tor.service osint-web.service osint-update.timer 2>/dev/null \
+      | paste <(echo -e "spiderfoot\ntor\nweb\nupdate.timer") - || true
+    echo "── clés d'API dans ${OSINT_ENV} ──────────"
+    for k in SHODAN_API_KEY HUNTER_API_KEY GITHUB_TOKEN HIBP_API_KEY GREYNOISE_API_KEY \
+             VIRUSTOTAL_API_KEY SECURITYTRAILS_API_KEY INTELX_API_KEY SERPAPI_KEY GOOGLE_CSE_KEY; do
+      v="${!k:-}"; [[ -n "$v" ]] && printf '  \033[1;92m✔\033[m %s\n' "$k" || printf '  \033[2m·\033[m %s (non définie)\n' "$k"
+    done ;;
+
+  *) die "commande inconnue : $cmd  (essayez : osint help)" ;;
+esac

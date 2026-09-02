@@ -1,0 +1,31 @@
+{% import "_macros.j2" as m %}<!doctype html>
+<html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Dossier OSINT — {{ case.case }}</title>
+<style>{% include "_base.css" %}</style>
+</head><body><div class="wrap">
+  <h1 style="color:var(--accent)">Dossier d'enquête</h1>
+  <p class="sub muted">
+    Réf. <code>{{ case.case }}</code>
+    {% if case.seed %}· point de départ : <b>{{ case.seed.kind }}</b> = <code>{{ case.seed.value }}</code>{% endif %}
+    · {{ case.n_nodes }} entités / {{ case.n_edges }} liens
+    · {{ case.updated or case.created }}
+  </p>
+  <p><a href="graph.html">Voir le graphe d'entités</a> ·
+     <a href="graph.json">graph.json</a> (import Maltego / Gephi) ·
+     <a href="runs/">exécutions brutes</a></p>
+
+  <div class="warnbar">
+    Rapport produit automatiquement à partir de sources ouvertes. Chaque champ porte un niveau de
+    confiance ; les <b>pistes</b> ne sont pas des faits. Données personnelles — usage soumis au RGPD
+    et à une base légale. Voir <code>/opt/osint/src/docs/LEGAL.md</code>.
+  </div>
+
+  {% for p in people %}
+    {{ m.person_card(p, nested=False) }}
+  {% else %}
+    <p class="muted">Aucune personne consolidée. Consultez le graphe et les exécutions brutes.</p>
+  {% endfor %}
+
+  <div class="foot">Généré par <code>osint dossier</code> — LXC OSINT v2.</div>
+</div></body></html>

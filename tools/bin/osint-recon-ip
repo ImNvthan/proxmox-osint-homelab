@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# osint-recon-ip <ip|cidr> [--active]
+# Renseignement sur un hôte / bloc réseau depuis des sources publiques sans clé.
+set -uo pipefail
+. /opt/osint/lib/common.sh
+
+TARGET=""; ACTIVE=0
+for a in "$@"; do case "$a" in --active) ACTIVE=1 ;; -*) : ;; *) TARGET="$a" ;; esac; done
+require_target "$TARGET"
+
+RUNDIR="$(new_run ip "$TARGET")"
+cd "$RUNDIR/raw" || die "impossible d'entrer dans le répertoire d'exécution"
+log "renseignement IP → $TARGET"
+
+is_cidr=0; [[ "$TARGET" == */* ]] && is_cidr=1
+BASEIP="${TARGET%%/*}"
+
+run whois whois.txt -- whois "$TARGET"
+run_sh asn asn.json "oget https://api.iptoasn.com/v1/as/ip/$BASEIP"
+run_sh geo geo.json "oget https://ipinfo.io/$BASEIP/json"
+run_sh rdns rdns.txt "dig +short -x $BASEIP"
+run_sh shodan-internetdb shodan.json "oget https://internetdb.shodan.io/$BASEIP"
+
+if [[ -n "${GREYNOISE_API_KEY:-}" ]]; then
+  run_sh greynoise greynoise.json "curl -fsS -H 'key: $GREYNOISE_API_KEY' https://api.greynoise.io/v3/community/$BASEIP"
+else
+  run_sh greynoise greynoise.json "oget https://api.greynoise.io/v3/community/$BASEIP"
+fi
+[[ -n "${SHODAN_API_KEY:-}" ]] && run_sh shodan-host shodan-host.json "oget 'https://api.shodan.io/shodan/host/$BASEIP?key=$SHODAN_API_KEY'"
+
+if [[ $is_cidr -eq 1 ]] && have nmap; then
+  mask="${TARGET#*/}"
+  if [[ "$mask" -ge 24 ]]; then
+    run_sh cidr-hosts cidr-hosts.txt "nmap -n -sL $TARGET | awk '/Nmap scan report/{print \$NF}'"
+    run_sh cidr-internetdb cidr-internetdb.json \
+      "while read -r ip; do echo \"# \$ip\"; oget https://internetdb.shodan.io/\$ip; echo; done < <(head -n 256 '$RUNDIR/raw/cidr-hosts.txt')"
+  else
+    echo "CIDR plus large que /24 — seuls whois/ASN effectués." >cidr.note
+  fi
+fi
+
+if [[ $ACTIVE -eq 1 ]] && have nmap; then
+  warn "mode ACTIF : scan de services nmap de $TARGET — assurez-vous d'y être autorisé."
+  run nmap nmap.txt -- nmap -Pn -sV --top-ports 1000 -T3 --open "$TARGET"
+fi
+
+finish_run

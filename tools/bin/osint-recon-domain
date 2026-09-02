@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# osint-recon-domain <domaine> [--active]
+# Empreinte d'un domaine, passive par défaut. Chaque étape est « au mieux » :
+# un échec n'arrête jamais le pipeline, et un rapport est toujours produit.
+set -uo pipefail
+. /opt/osint/lib/common.sh
+
+TARGET=""; ACTIVE=0
+for a in "$@"; do
+  case "$a" in
+    --active) ACTIVE=1 ;;
+    -*) warn "option inconnue ignorée : $a" ;;
+    *) TARGET="$a" ;;
+  esac
+done
+require_target "$TARGET"
+TARGET="${TARGET#http://}"; TARGET="${TARGET#https://}"; TARGET="${TARGET%%/*}"
+
+RUNDIR="$(new_run domain "$TARGET")"
+cd "$RUNDIR/raw" || die "impossible d'entrer dans le répertoire d'exécution"
+log "reconnaissance de domaine → $TARGET   ($RUNDIR)"
+
+run whois whois.txt -- whois "$TARGET"
+
+run_sh dns-records dns.txt \
+  "for t in A AAAA MX NS TXT SOA CAA; do echo \"== \$t ==\"; dig +noall +answer $TARGET \$t; done"
+have dnsrecon && run dnsrecon dnsrecon.json -- dnsrecon -d "$TARGET" -t std -j "$RUNDIR/raw/dnsrecon.json"
+run_sh dmarc-spf dmarc.txt \
+  "echo '== SPF =='; dig +short TXT $TARGET | grep -i spf1; echo '== DMARC =='; dig +short TXT _dmarc.$TARGET; echo '== DKIM =='; for s in default google selector1 selector2 k1 mail; do echo \"-- \$s --\"; dig +short TXT \$s._domainkey.$TARGET; done"
+have checkdmarc && run checkdmarc checkdmarc.json -- checkdmarc -f json -o "$RUNDIR/raw/checkdmarc.json" "$TARGET"
+
+: >subs.txt
+have subfinder   && run subfinder   subfinder.txt   -- subfinder -silent -all -d "$TARGET"
+have assetfinder && run_sh assetfinder assetfinder.txt "assetfinder --subs-only $TARGET"
+have amass       && run amass       amass.txt       -- amass enum -passive -nocolor -d "$TARGET"
+run_sh crtsh crtsh.json "oget 'https://crt.sh/?q=%25.$TARGET&output=json'"
+cat subfinder.txt assetfinder.txt amass.txt 2>/dev/null \
+  | grep -oiE "([a-z0-9_-]+\.)+$TARGET" | tr 'A-Z' 'a-z' | sort -u >subs.txt || true
+jq -r '.[].name_value' crtsh.json 2>/dev/null | sed 's/\*\.//g' | tr 'A-Z' 'a-z' \
+  | grep -E "\.?$TARGET$" | sort -u >>subs.txt || true
+echo "$TARGET" >>subs.txt; sort -u -o subs.txt subs.txt
+ok "$(wc -l <subs.txt) noms d'hôtes candidats"
+
+have dnsx && run_sh dnsx resolved.txt "dnsx -silent -a -resp-only -l subs.txt | sort -u"
+if have httpx; then
+  run httpx httpx.jsonl -- httpx -silent -json -sc -title -tech-detect -ip -cname -location -no-color -l subs.txt
+  jq -r 'select(.status_code!=null) | .url' httpx.jsonl 2>/dev/null | sort -u >live.txt || true
+  ok "$(wc -l <live.txt 2>/dev/null || echo 0) hôtes web actifs"
+fi
+
+if have gowitness && [[ -s live.txt ]]; then
+  mkdir -p "$RUNDIR/screens"
+  run_sh gowitness "" \
+    "cd '$RUNDIR' && (gowitness scan file -f '$RUNDIR/raw/live.txt' --screenshot-path '$RUNDIR/screens' --write-none 2>/dev/null \
+      || gowitness file -f '$RUNDIR/raw/live.txt' -P '$RUNDIR/screens' --disable-db)"
+fi
+
+have gau     && run_sh gau urls.txt "gau --subs --threads 5 $TARGET | head -n 5000"
+have waymore && [[ ! -s urls.txt ]] && run waymore waymore.txt -- waymore -i "$TARGET" -mode U -oU "$RUNDIR/raw/waymore.txt"
+have dnstwist && run dnstwist dnstwist.json -- dnstwist --registered --format json "$TARGET"
+
+if have whatweb && [[ -s live.txt ]]; then
+  run_sh whatweb whatweb.json "whatweb --no-errors -a 1 --log-json='$RUNDIR/raw/whatweb.json' \$(head -n 40 '$RUNDIR/raw/live.txt' | tr '\n' ' ')"
+fi
+
+have theHarvester && run theHarvester theharvester.json -- \
+  theHarvester -d "$TARGET" -b "crtsh,duckduckgo,otx,rapiddns,threatminer,anubis,hackertarget,urlscan" \
+               -f "$RUNDIR/raw/theharvester"
+
+if [[ -s resolved.txt ]]; then
+  run_sh shodan-internetdb shodan.json \
+    "while read -r ip; do [ -n \"\$ip\" ] && oget https://internetdb.shodan.io/\$ip; echo; done < <(sort -u '$RUNDIR/raw/resolved.txt' | head -n 64)"
+fi
+
+if [[ $ACTIVE -eq 1 ]]; then
+  warn "mode ACTIF : nmap contre les IPs résolues — assurez-vous d'y être autorisé."
+  [[ -s resolved.txt ]] && have nmap && run nmap nmap.txt -- nmap -Pn -sV --top-ports 200 -T3 --open -iL "$RUNDIR/raw/resolved.txt"
+fi
+
+finish_run

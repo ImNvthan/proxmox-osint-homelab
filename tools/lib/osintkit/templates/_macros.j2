@@ -1,0 +1,90 @@
+{% macro conf_badge(c) -%}
+{%- if c >= 0.7 -%}<span class="badge b-hi">sûr</span>
+{%- elif c >= 0.45 -%}<span class="badge b-md">probable</span>
+{%- else -%}<span class="badge b-lo">piste</span>{%- endif -%}
+{%- endmacro %}
+
+{% macro social_chips(items) -%}
+<div class="chips">
+{% for s in items %}
+  <span class="chip">
+    <b>{{ s.platform }}</b>
+    {% if s.url %}<a href="{{ s.url }}" target="_blank" rel="noopener">{{ s.handle or s.url }}</a>
+    {% else %}<small>{{ s.handle }}</small>{% endif %}
+    {{ conf_badge(s.confidence) }}
+  </span>
+{% else %}
+  <span class="muted">— aucun réseau social identifié —</span>
+{% endfor %}
+</div>
+{%- endmacro %}
+
+{% macro person_card(p, nested=False) -%}
+<article class="affiche">
+  <div class="hdr">
+    <div>
+      <h1>{{ p.display }}</h1>
+      <div class="sub">
+        {% if p.first_name %}Prénom : {{ p.first_name }}{% endif %}
+        {% if p.last_name %} · Nom : {{ p.last_name }}{% endif %}
+        · fiabilité fiche {{ conf_badge(p.confidence) }}
+      </div>
+    </div>
+    {% if p.photos %}<img class="photo" src="{{ p.photos[0] }}" alt="photo" referrerpolicy="no-referrer">{% endif %}
+  </div>
+
+  <h2 class="section">Identité</h2>
+  <dl class="grid">
+    <dt>Nom</dt><dd>{{ p.last_name or "—" }}</dd>
+    <dt>Prénom</dt><dd>{{ p.first_name or "—" }}</dd>
+    {% if p.birthdate %}<dt>Naissance</dt><dd>{{ p.birthdate }}</dd>{% endif %}
+    <dt>Téléphone</dt><dd>
+      {% for x in p.phones %}{{ x.value }}{% if x.meta and x.meta.carrier %} <span class="muted">({{ x.meta.type }}, {{ x.meta.carrier }})</span>{% endif %} {{ conf_badge(x.confidence) }}<br>{% else %}—{% endfor %}
+    </dd>
+    <dt>E-mail</dt><dd>
+      {% for x in p.emails %}{{ x.value }} {{ conf_badge(x.confidence) }}<br>{% else %}—{% endfor %}
+    </dd>
+    <dt>Adresse</dt><dd>
+      {% for x in p.addresses %}{{ x.value }} {{ conf_badge(x.confidence) }}<br>{% else %}—{% endfor %}
+    </dd>
+    <dt>Employeur / orga</dt><dd>
+      {% for x in p.orgs %}{{ x.value }} {{ conf_badge(x.confidence) }}<br>{% else %}—{% endfor %}
+    </dd>
+  </dl>
+
+  <h2 class="section">Réseaux sociaux</h2>
+  {{ social_chips(p.social) }}
+
+  {% if p.related %}
+  <h2 class="section">Famille / proches ({{ p.related|length }})</h2>
+  {% if not nested %}
+  <div class="warnbar">Ces personnes sont des <b>tiers</b>. Ne conservez des données sur elles
+  qu'avec une base légale (RGPD art. 6). Les liens familiaux ci-dessous sont déduits de mentions
+  publiques et <b>non vérifiés</b>.</div>
+  {% endif %}
+  {% for r in p.related %}
+    {% if r.ctx and not nested %}
+      <div class="kin">
+        <h3>{{ r.ctx.display }} <span class="muted">— {{ r.rel }} {{ conf_badge(r.confidence) }}</span></h3>
+        <dl class="grid">
+          <dt>Téléphone</dt><dd>{% for x in r.ctx.phones %}{{ x.value }} {% else %}—{% endfor %}</dd>
+          <dt>E-mail</dt><dd>{% for x in r.ctx.emails %}{{ x.value }} {% else %}—{% endfor %}</dd>
+          <dt>Adresse</dt><dd>{% for x in r.ctx.addresses %}{{ x.value }} {% else %}—{% endfor %}</dd>
+        </dl>
+        {{ social_chips(r.ctx.social) }}
+      </div>
+    {% else %}
+      <div class="kin">
+        <h3>{{ r.name }} <span class="muted">— {{ r.rel }} {{ conf_badge(r.confidence) }}</span></h3>
+        {% if r.ctx %}{{ social_chips(r.ctx.social) }}{% else %}<span class="muted">non approfondi</span>{% endif %}
+      </div>
+    {% endif %}
+  {% endfor %}
+  {% endif %}
+
+  <div class="foot">
+    Sources : {{ (p.runs + p.tools)|join(" · ") or "—" }}<br>
+    Fiche générée automatiquement — <b>à vérifier</b> avant tout usage. Investigations autorisées uniquement.
+  </div>
+</article>
+{%- endmacro %}

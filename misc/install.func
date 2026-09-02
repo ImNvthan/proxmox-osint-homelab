@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# install.func - fonctions utilitaires chargées par install/osint-install.sh
+# *à l'intérieur* du conteneur. Sans dépendance, pour pouvoir être récupéré seul.
+# Licence : MIT
+
+if [[ -t 1 ]]; then
+  YW=$'\033[33m'; GN=$'\033[1;92m'; RD=$'\033[01;31m'; BL=$'\033[36m'; CL=$'\033[m'; BOLD=$'\033[1m'
+else
+  YW=""; GN=""; RD=""; BL=""; CL=""; BOLD=""
+fi
+
+WARN_LOG="${WARN_LOG:-/opt/osint/install-warnings.log}"
+
+msg_info()  { echo -e " ${YW}➜ ${CL}${1-}"; }
+msg_ok()    { echo -e " ${GN}✔ ${1-}${CL}"; }
+msg_warn()  { echo -e " ${YW}! ${1-}${CL}"; mkdir -p "$(dirname "$WARN_LOG")"; echo "$(date -Is)  $1" >>"$WARN_LOG"; }
+msg_error() { echo -e " ${RD}✗ ${1-}${CL}"; }
+section()   { echo -e "\n${BL}${BOLD}== $* ==${CL}"; }
+
+# try "<libellé>" cmd args...  — n'avorte jamais ; consigne les échecs.
+try() {
+  local label="$1"; shift
+  if "$@" >>/opt/osint/install.log 2>&1; then
+    msg_ok "$label"
+  else
+    msg_warn "$label — échec (voir /opt/osint/install.log). On continue."
+    return 0
+  fi
+}
+
+try_sh() {
+  local label="$1"; shift
+  if bash -c "$*" >>/opt/osint/install.log 2>&1; then
+    msg_ok "$label"
+  else
+    msg_warn "$label — échec (voir /opt/osint/install.log). On continue."
+    return 0
+  fi
+}
+
+apt_install() {
+  DEBIAN_FRONTEND=noninteractive apt-get -qq install -y --no-install-recommends "$@" \
+    >>/opt/osint/install.log 2>&1
+}
+
+pipx_install() {
+  local pkg="$1" name="${2:-$1}"
+  try "pipx : ${name}" env PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin \
+      pipx install --pip-args=--no-cache-dir "$pkg"
+}
+
+go_install() {
+  local mod="$1" label="${2:-$1}"
+  try "go : ${label}" env GOBIN=/usr/local/bin GOFLAGS=-buildvcs=false \
+      /usr/local/go/bin/go install "$mod"
+}
