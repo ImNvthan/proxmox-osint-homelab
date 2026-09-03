@@ -73,7 +73,6 @@ variables() {
   var_start="${var_start:-yes}"; var_onboot="${var_onboot:-1}"
   OSINT_REPO_URL="${OSINT_REPO_URL:-https://github.com/ImNvthan/proxmox-osint-homelab}"
   OSINT_REPO_BRANCH="${OSINT_REPO_BRANCH:-main}"
-  OSINT_INSTALL_URL="${OSINT_INSTALL_URL:-https://raw.githubusercontent.com/ImNvthan/proxmox-osint-homelab/${OSINT_REPO_BRANCH}/install/osint-install.sh}"
   LXC_PW="$(openssl rand -base64 24 2>/dev/null | tr -dc 'A-Za-z0-9' | cut -c1-20)"
   [[ -n "$LXC_PW" ]] || LXC_PW="Osint$(date +%s)x"
   return 0
@@ -181,14 +180,19 @@ build_container() {
     || { msg_error "Pas de connectivité réseau — vérifiez le pont ${BRG}."; exit 1; }
   msg_ok "Conteneur en ligne"
 
-  msg_info "Récupération de l'installateur dans le conteneur"
-  pct exec "$CT_ID" -- bash -c "apt-get -qq update >/dev/null 2>&1; apt-get -qq install -y curl ca-certificates >/dev/null 2>&1 || true"
-  pct exec "$CT_ID" -- bash -c "curl -fsSL --retry 5 --retry-all-errors --retry-delay 4 '${OSINT_INSTALL_URL}' -o /root/osint-install.sh" \
-    || { msg_error "Impossible de télécharger ${OSINT_INSTALL_URL}"; exit 1; }
-  msg_ok "Installateur téléchargé"
+  msg_info "Récupération du dépôt dans le conteneur (archive)"
+  pct exec "$CT_ID" -- bash -c "apt-get -qq update >/dev/null 2>&1; apt-get -qq install -y curl ca-certificates tar >/dev/null 2>&1 || true"
+  local slug="${OSINT_REPO_URL#https://github.com/}"; slug="${slug%.git}"
+  pct exec "$CT_ID" -- bash -c "set -e; rm -rf /root/osint-src; mkdir -p /root/osint-src; \
+    curl -fsSL --retry 6 --retry-all-errors --retry-delay 4 --connect-timeout 20 \
+      'https://codeload.github.com/${slug}/tar.gz/refs/heads/${OSINT_REPO_BRANCH}' -o /root/osint.tgz; \
+    tar -xzf /root/osint.tgz -C /root/osint-src --strip-components=1; \
+    test -f /root/osint-src/install/osint-install.sh" \
+    || { msg_error "Impossible de récupérer ${OSINT_REPO_URL} (branche ${OSINT_REPO_BRANCH})"; exit 1; }
+  msg_ok "Dépôt récupéré"
 
   msg_info "Installation OSINT (compilations Go, pip, SpiderFoot… ~15–30 min)"
-  local runner="OSINT_REPO_URL='${OSINT_REPO_URL}' OSINT_REPO_BRANCH='${OSINT_REPO_BRANCH}' VERBOSE='${VERBOSE}' DISABLEIP6='${DISABLEIP6}' bash /root/osint-install.sh"
+  local runner="OSINT_REPO_URL='${OSINT_REPO_URL}' OSINT_REPO_BRANCH='${OSINT_REPO_BRANCH}' VERBOSE='${VERBOSE}' DISABLEIP6='${DISABLEIP6}' bash /root/osint-src/install/osint-install.sh"
   if [[ "$VERBOSE" == "yes" ]]; then
     pct exec "$CT_ID" -- bash -c "$runner"
   else

@@ -4,8 +4,10 @@
 #  Provisionne la chaîne d'outils OSINT + le moteur d'autopilote `osintkit`
 #  + la CLI `osint` + l'interface web.
 #
-#  Aussi utilisable à la main sur une machine Debian 12 / Ubuntu 22.04+ à vous :
-#    curl -fsSL https://raw.githubusercontent.com/ImNvthan/proxmox-osint-homelab/main/install/osint-install.sh | bash
+#  Aussi utilisable à la main sur une machine Debian 12 / Ubuntu 22.04+ à vous.
+#  Recommandé (immunisé contre le cache de raw.githubusercontent) :
+#    curl -fsSL https://codeload.github.com/ImNvthan/proxmox-osint-homelab/tar.gz/refs/heads/main \
+#      | tar xz && bash proxmox-osint-homelab-main/install/osint-install.sh
 #
 #  Licence : MIT
 # ---------------------------------------------------------------------------
@@ -13,29 +15,46 @@ set -Eeuo pipefail
 
 OSINT_REPO_URL="${OSINT_REPO_URL:-https://github.com/ImNvthan/proxmox-osint-homelab}"
 OSINT_REPO_BRANCH="${OSINT_REPO_BRANCH:-main}"
-FUNC_BASE="${OSINT_FUNC_BASE:-https://raw.githubusercontent.com/ImNvthan/proxmox-osint-homelab/${OSINT_REPO_BRANCH}/misc}"
 GO_VERSION="${GO_VERSION:-1.22.6}"
 SPIDERFOOT_BIND="${SPIDERFOOT_BIND:-127.0.0.1:5001}"
 OSINT_WEB_BIND="${OSINT_WEB_BIND:-127.0.0.1}"
 PREFIX=/opt/osint
 
-# Jamais d'invite d'identifiants git bloquante : on échoue vite et on
-# privilégie les archives tar.gz via curl (voir fetch_src dans install.func).
+# Jamais d'invite d'identifiants git bloquante : archives tar.gz via curl.
 export GIT_TERMINAL_PROMPT=0
 
 mkdir -p "$PREFIX" /etc/osint
 : >/opt/osint/install.log
 
-_ifunc="$(dirname "$0")/../misc/install.func"
-if [[ -f "$_ifunc" ]]; then
-  # shellcheck source=/dev/null
-  source "$_ifunc"
-else
-  source <(curl -fsSL "${FUNC_BASE}/install.func") || {
-    echo "FATAL : impossible de récupérer install.func depuis ${FUNC_BASE}" >&2; exit 1
-  }
+# --- bootstrap : une seule source de vérité = une archive du dépôt ----------
+# Si on tourne depuis un clone / une archive extraite, on l'utilise. Sinon on
+# télécharge l'archive codeload (branche exacte, pas de cache raw persistant).
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT=""
+if [[ -d "$SELF_DIR/../tools" && -f "$SELF_DIR/../misc/install.func" ]]; then
+  REPO_ROOT="$(cd "$SELF_DIR/.." && pwd)"
 fi
-command -v msg_ok >/dev/null || { echo "FATAL : install.func ne s'est pas chargé"; exit 1; }
+if [[ -z "$REPO_ROOT" ]]; then
+  _slug="${OSINT_REPO_URL#https://github.com/}"; _slug="${_slug%.git}"
+  _bt="$(mktemp -d)"
+  echo "➜ Récupération du dépôt ${_slug}@${OSINT_REPO_BRANCH} (archive)…"
+  if curl -fsSL --retry 6 --retry-all-errors --retry-delay 4 --connect-timeout 20 \
+       "https://codeload.github.com/${_slug}/tar.gz/refs/heads/${OSINT_REPO_BRANCH}" -o "$_bt/r.tgz" \
+     && tar -xzf "$_bt/r.tgz" -C "$_bt"; then
+    for _d in "$_bt"/*/; do [[ -d "$_d" ]] && REPO_ROOT="${_d%/}" && break; done
+  fi
+  if [[ ! -d "${REPO_ROOT:-/nonexistent}/tools" ]]; then
+    echo "FATAL : impossible de récupérer ${OSINT_REPO_URL} (réseau / GitHub indisponible)." >&2
+    echo "        Réessayez dans quelques minutes, ou :" >&2
+    echo "        curl -fsSL https://codeload.github.com/${_slug}/tar.gz/refs/heads/${OSINT_REPO_BRANCH} | tar xz && bash */install/osint-install.sh" >&2
+    exit 1
+  fi
+fi
+
+# shellcheck source=/dev/null
+source "$REPO_ROOT/misc/install.func"
+command -v msg_ok >/dev/null && command -v fetch_src >/dev/null \
+  || { echo "FATAL : install.func incomplet (${REPO_ROOT}/misc/install.func)"; exit 1; }
 
 trap 'msg_error "Erreur ligne $LINENO. Installation partielle conservée ; voir /opt/osint/install.log"; exit 1' ERR
 
@@ -147,16 +166,13 @@ try_sh "installation de phoneinfoga" \
 # =======================================================================
 section "CLI OSINT + moteur osintkit + charge utile"
 SRC=/opt/osint/src
-OSINT_REPO_SLUG="${OSINT_REPO_URL#https://github.com/}"; OSINT_REPO_SLUG="${OSINT_REPO_SLUG%.git}"
-fetch_src "$OSINT_REPO_SLUG" "$OSINT_REPO_BRANCH" "$SRC" \
-  && msg_ok "dépôt récupéré ($OSINT_REPO_SLUG@$OSINT_REPO_BRANCH)" \
-  || msg_warn "récupération du dépôt en échec — nouvelle tentative au premier « osint-update »"
-
+# La charge utile vient de l'archive déjà récupérée au bootstrap ($REPO_ROOT).
+rm -rf "$SRC"; mkdir -p "$SRC"; cp -a "$REPO_ROOT/." "$SRC/"
 if [[ ! -d "$SRC/tools" ]]; then
-  msg_error "charge utile tools/ absente — CLI non installée. Réseau/GitHub indisponible ?"
-  msg_error "Relancez :  GIT_TERMINAL_PROMPT=0 bash /root/osint-install.sh"
+  msg_error "charge utile tools/ absente sous $REPO_ROOT — installation impossible."
   exit 1
 fi
+msg_ok "charge utile en place ($SRC)"
 
 if [[ -d "$SRC/tools" ]]; then
   install -d /usr/local/bin /opt/osint/lib /opt/osint/runs /opt/osint/cases /opt/osint/wordlists /etc/osint/monitors

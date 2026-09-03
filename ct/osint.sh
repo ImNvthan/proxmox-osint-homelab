@@ -12,9 +12,13 @@
 # ---------------------------------------------------------------------------
 set -Eeo pipefail
 
+REPO_SLUG="${OSINT_REPO_SLUG:-ImNvthan/proxmox-osint-homelab}"
 REPO_BRANCH="${OSINT_REPO_BRANCH:-main}"
-FUNC_BASE="${OSINT_FUNC_BASE:-https://raw.githubusercontent.com/ImNvthan/proxmox-osint-homelab/${REPO_BRANCH}/misc}"
+export OSINT_REPO_URL="${OSINT_REPO_URL:-https://github.com/${REPO_SLUG}}"
+export OSINT_REPO_BRANCH="$REPO_BRANCH"
 
+# build.func : copie locale si on tourne depuis un clone, sinon archive codeload
+# (branche exacte, pas de cache raw.githubusercontent persistant).
 _src="${BASH_SOURCE[0]:-}"
 _local=""
 if [[ -n "$_src" ]]; then
@@ -25,9 +29,17 @@ if [[ -n "$_local" ]]; then
   # shellcheck source=/dev/null
   source "$_local"
 else
-  source <(curl -fsSL "${FUNC_BASE}/build.func") || {
-    echo "Échec de la récupération de build.func depuis ${FUNC_BASE}" >&2; exit 1
-  }
+  _bt="$(mktemp -d)"
+  if curl -fsSL --retry 6 --retry-all-errors --retry-delay 4 --connect-timeout 20 \
+       "https://codeload.github.com/${REPO_SLUG}/tar.gz/refs/heads/${REPO_BRANCH}" -o "$_bt/r.tgz" \
+     && tar -xzf "$_bt/r.tgz" -C "$_bt" --strip-components=1 2>/dev/null \
+     && [[ -f "$_bt/misc/build.func" ]]; then
+    # shellcheck source=/dev/null
+    source "$_bt/misc/build.func"
+  else
+    echo "Échec de la récupération de https://github.com/${REPO_SLUG} (branche ${REPO_BRANCH})" >&2
+    exit 1
+  fi
 fi
 
 APP="OSINT"
