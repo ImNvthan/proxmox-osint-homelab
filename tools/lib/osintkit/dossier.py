@@ -115,6 +115,15 @@ def _person_dossier_ctx(g: Graph, node: dict) -> dict:
             nb["emails"] = [{"value": node["label"], "confidence": node["confidence"]}] + nb["emails"]
         elif node["kind"] == "phone":
             nb["phones"] = [{"value": node["label"], "meta": a, "confidence": node["confidence"]}] + nb["phones"]
+    # borne l'affichage : les longues listes de « pistes » (permutations non
+    # vérifiées) sont résumées en « + N autres »
+    def cap(items, n):
+        return items[:n], max(0, len(items) - n)
+    nb["emails"], nb["emails_more"] = cap(nb["emails"], 10)
+    nb["phones"], nb["phones_more"] = cap(nb["phones"], 6)
+    nb["social"], nb["social_more"] = cap(nb["social"], 20)
+    nb["addresses"], nb["addresses_more"] = cap(nb["addresses"], 6)
+
     return {
         "id": node["id"], "first_name": first, "last_name": last,
         "display": display, "confidence": node["confidence"],

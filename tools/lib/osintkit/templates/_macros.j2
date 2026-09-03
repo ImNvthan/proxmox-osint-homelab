@@ -39,13 +39,16 @@
     <dt>Prénom</dt><dd>{{ p.first_name or "—" }}</dd>
     {% if p.birthdate %}<dt>Naissance</dt><dd>{{ p.birthdate }}</dd>{% endif %}
     <dt>Téléphone</dt><dd>
-      {% for x in p.phones %}{{ x.value }}{% if x.meta and x.meta.carrier %} <span class="muted">({{ x.meta.type }}, {{ x.meta.carrier }})</span>{% endif %} {{ conf_badge(x.confidence) }}<br>{% else %}—{% endfor %}
+      {% for x in p.phones %}{{ x.value }}{% if x.meta and (x.meta.carrier or x.meta.region) %} <span class="muted">({{ x.meta.type }}{% if x.meta.carrier %}, {{ x.meta.carrier }}{% endif %}{% if x.meta.region %}, {{ x.meta.region }}{% endif %})</span>{% endif %} {{ conf_badge(x.confidence) }}<br>{% else %}—{% endfor %}
+      {% if p.phones_more %}<span class="muted">+ {{ p.phones_more }} autre(s)</span>{% endif %}
     </dd>
     <dt>E-mail</dt><dd>
       {% for x in p.emails %}{{ x.value }} {{ conf_badge(x.confidence) }}<br>{% else %}—{% endfor %}
+      {% if p.emails_more %}<span class="muted">+ {{ p.emails_more }} permutation(s) non vérifiée(s)</span>{% endif %}
     </dd>
     <dt>Adresse</dt><dd>
       {% for x in p.addresses %}{{ x.value }} {{ conf_badge(x.confidence) }}<br>{% else %}—{% endfor %}
+      {% if p.addresses_more %}<span class="muted">+ {{ p.addresses_more }} autre(s)</span>{% endif %}
     </dd>
     <dt>Employeur / orga</dt><dd>
       {% for x in p.orgs %}{{ x.value }} {{ conf_badge(x.confidence) }}<br>{% else %}—{% endfor %}

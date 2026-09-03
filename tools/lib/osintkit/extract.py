@@ -76,8 +76,18 @@ def extract(run_dir: str, region: str = "FR") -> list[dict]:
     seen: set[tuple] = set()
 
     def push(s):
+        if not s["value"]:
+            return
         key = (s["kind"], s["value"].lower())
-        if key in seen or not s["value"]:
+        if key in seen:                       # enrichir l'entrée existante
+            for e in out:
+                if (e["kind"], e["value"].lower()) == key:
+                    if s.get("attrs"):
+                        e.setdefault("attrs", {}).update(s["attrs"])
+                    if s.get("url") and not e.get("url"):
+                        e["url"] = s["url"]
+                    e["confidence"] = max(e["confidence"], s["confidence"])
+                    break
             return
         seen.add(key)
         out.append(s)
@@ -230,6 +240,40 @@ def extract(run_dir: str, region: str = "FR") -> list[dict]:
             plat, handle = platform_from_url(u)
             push(_sel("account", f"{plat}/{handle}" if plat and handle else u, "relations", 0.4, url=u))
 
+    # ---- websearch (osint-recon-person) : profils sociaux du NOM --
+    ws = _json(P("websearch.json"))
+    if isinstance(ws, dict):
+        for pr in ws.get("profiles", []):
+            plat, url = pr.get("platform"), pr.get("url")
+            _p2, handle = platform_from_url(url) if url else (None, None)
+            key = f"{plat}/{handle}" if plat and handle else (plat or url)
+            if key:
+                push(_sel("account", key, "websearch", 0.62, url=url))
+        for em in ws.get("emails", []):
+            if EMAIL_RE.fullmatch(em or "") and em.split("@")[-1] not in DROP_EMAIL_DOMAINS:
+                push(_sel("email", norm_email(em), "websearch", 0.55))
+        for ph in ws.get("phones", []):
+            e164, meta = norm_phone(ph, region)
+            if e164:
+                push(_sel("phone", e164, "websearch", 0.5))
+
+    # ---- phone-parse (python-phonenumbers) : opérateur / type / région
+    pp = _json(P("phone-parse.json"))
+    if isinstance(pp, dict) and pp.get("e164"):
+        attrs = {k: pp[k] for k in ("carrier", "type", "region", "valid") if pp.get(k)}
+        push(_sel("phone", pp["e164"], "phonenumbers", 0.95, attrs=attrs))
+        if pp.get("region"):
+            push(_sel("address", str(pp["region"]), "phonenumbers", 0.3))
+
+    # ---- person : promeut quelques pseudos candidats pour le pivot -
+    if rtype == "person":
+        cand = [u.strip() for u in _read(P("usernames.txt")).splitlines() if u.strip()]
+        for u in cand[:5]:
+            push(_sel("username", u, "permutation", 0.58))
+        for e in [x.strip() for x in _read(P("emails.txt")).splitlines() if x.strip()][:6]:
+            if EMAIL_RE.fullmatch(e):
+                push(_sel("email", norm_email(e), "permutation", 0.35))
+
     # ---- whois (domain/ip) : titulaire ---------------------------
     who = _read(P("whois.txt"))
     if who:
@@ -241,8 +285,12 @@ def extract(run_dir: str, region: str = "FR") -> list[dict]:
             push(_sel("person_name", m.group(1).strip(), "whois", 0.45))
 
     # ---- balayage générique de tout raw/*.{txt,json,jsonl} -------
+    # (on exclut les fichiers de PERMUTATIONS synthétiques : ce sont des
+    #  devinettes, pas des trouvailles — elles pollueraient le graphe/dossier)
+    SYNTH = {"emails.txt", "usernames.txt", "permutations.json", "dorks.md",
+             "dorks-phone.md", "candidate-emails.txt", "websearch.json"}
     for fn in sorted(os.listdir(raw)) if os.path.isdir(raw) else []:
-        if not fn.endswith((".txt", ".json", ".jsonl", ".md")):
+        if not fn.endswith((".txt", ".json", ".jsonl", ".md")) or fn in SYNTH:
             continue
         blob = _read(os.path.join(raw, fn))
         if len(blob) > 400_000:

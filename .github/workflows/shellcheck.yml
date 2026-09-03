@@ -30,9 +30,11 @@ jobs:
       - run: pip install pyflakes
       - run: python -m pyflakes tools/lib/osintkit/*.py
       - name: Import smoke test
-        run: PYTHONPATH=tools/lib python -c "import osintkit.classify, osintkit.normalize, osintkit.extract, osintkit.graph"
+        run: PYTHONPATH=tools/lib python -c "import osintkit.classify, osintkit.normalize, osintkit.extract, osintkit.graph, osintkit.websearch, osintkit.dossier"
       - name: classify sanity
         run: |
           PYTHONPATH=tools/lib python -m osintkit.classify "+33612345678" | grep -q '^phone'
           PYTHONPATH=tools/lib python -m osintkit.classify "a@b.com"      | grep -q '^email'
           PYTHONPATH=tools/lib python -m osintkit.classify "Jean Dupont"  | grep -q '^person'
+          PYTHONPATH=tools/lib python -m osintkit.classify "mon numero c'est +33 6 81 03 88 20" | tr '\t' ' ' | grep -qx 'phone +33681038820'
+          PYTHONPATH=tools/lib python -m osintkit.classify "ecris moi a jean.dupont@gmail.com stp" | tr '\t' ' ' | grep -qx 'email jean.dupont@gmail.com'

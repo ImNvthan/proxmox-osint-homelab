@@ -2,6 +2,32 @@
 
 Format librement inspiré de [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.0.2] - 2026-09-03
+
+### Ajouté
+- `osintkit.websearch` : recherche web SANS clé (DuckDuckGo HTML, repli SerpAPI
+  si `SERPAPI_KEY`). `osint-recon-person` l'exécute désormais sur le nom lui-même
+  → sort les profils **LinkedIn / Twitter / Instagram / GitHub…** à partir d'un
+  nom, sans clé d'API.
+
+### Corrigé
+- **Classification** : un `+33…` ou un e-mail *au milieu d'une phrase* est
+  maintenant reconnu (« ton numéro en +33681038820 » → `phone +33681038820`,
+  plus « person: ton numéro en… » qui fabriquait `tonnumeroen…@gmail.com`).
+  Gère aussi `06 12 34 56 78`, `06.12.34.56.78`.
+- **Pivot nom → réseaux sociaux** : `osint-recon-person` promeut ses 5 meilleurs
+  pseudos candidats en sélecteurs `username` (conf. 0.58) → l'autopilote les
+  relance vraiment dans `sherlock`/`maigret`. Avant, il ne pivotait jamais.
+- **Numéro → opérateur / type / région** : `extract` lit `phone-parse.json`
+  (python-phonenumbers) et enrichit le nœud téléphone ; l'affiche affiche
+  « +33… (mobile, Orange France, France) ».
+- **Moins de bruit** : les permutations synthétiques (`emails.txt`,
+  `usernames.txt`, `permutations.json`, `websearch.json`) ne sont plus
+  ré-aspirées par le balayage regex générique ; l'affiche plafonne les longues
+  listes de « pistes » avec un « + N non vérifiées ».
+- `extract` : `push()` fusionne désormais `attrs`/`url`/confiance dans une entrée
+  existante au lieu de jeter le doublon.
+
 ## [2.0.1] - 2026-09-03
 
 ### Corrigé

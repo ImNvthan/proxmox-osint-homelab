@@ -66,6 +66,21 @@ cat >dorks.md <<EOF
 EOF
 ok "dorks → $RUNDIR/raw/dorks.md"
 
+# Recherche web SANS clé (DuckDuckGo) : profils sociaux + e-mails du NOM lui-même.
+# C'est ce qui fait sortir le LinkedIn / Twitter / Insta à partir d'un nom.
+wargs=("person" "$NAME")
+[[ -n "$CITY" ]]    && wargs+=(--ville "$CITY")
+[[ -n "$COMPANY" ]] && wargs+=(--entreprise "$COMPANY")
+[[ -n "${SERPAPI_KEY:-}" ]] && wargs+=(--serpapi "$SERPAPI_KEY")
+wargs+=(--out "$RUNDIR/raw/websearch.json")
+run websearch "" -- "$OSINT_PY" -m osintkit.websearch "${wargs[@]}"
+if [[ -s "$RUNDIR/raw/websearch.json" ]]; then
+  np=$(jq '.profiles | length' "$RUNDIR/raw/websearch.json" 2>/dev/null || echo 0)
+  ne=$(jq '.emails   | length' "$RUNDIR/raw/websearch.json" 2>/dev/null || echo 0)
+  ok "recherche web : $np profil(s), $ne e-mail(s) repérés"
+  jq -r '.profiles[]? | "  \(.platform)\t\(.url)"' "$RUNDIR/raw/websearch.json" 2>/dev/null | head -n 15 || true
+fi
+
 if [[ -n "$COMPANY" ]] && have theHarvester; then
   run theHarvester theharvester.json -- \
     theHarvester -d "$COMPANY" -b "crtsh,duckduckgo,otx,rapiddns,hackertarget,anubis" -f "$RUNDIR/raw/theharvester"

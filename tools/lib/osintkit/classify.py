@@ -22,9 +22,12 @@ from urllib.parse import urlparse
 from .normalize import norm_phone, platform_from_host
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]{2,}$")
+_EMAIL_IN = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,24}")
 _DOMAIN_RE = re.compile(r"^(?=.{4,253}$)([a-z0-9](-?[a-z0-9])*\.)+[a-z]{2,24}$", re.I)
 _HANDLE_RE = re.compile(r"^@?[a-z0-9](?:[a-z0-9._-]{1,38}[a-z0-9])?$", re.I)
 _PHONEISH_RE = re.compile(r"^\+?[\d][\d\s().\-/]{5,}$")
+# numéro intégré dans une phrase : +33 6 12 34 56 78  ·  06 12 34 56 78  ·  +1 202 555 0142
+_PHONE_IN = re.compile(r"\+\d[\d ().\-]{7,17}\d|\b0[1-9](?:[ .\-]?\d\d){4}\b")
 
 
 def classify(raw: str, default_region: str = "FR") -> tuple[str, str]:
@@ -47,18 +50,29 @@ def classify(raw: str, default_region: str = "FR") -> tuple[str, str]:
     if _EMAIL_RE.match(s):
         return ("email", s.lower())
 
-    # IP / CIDR
+    # IP / CIDR (avant la détection de numéro intégré)
     try:
         ipaddress.ip_network(s, strict=False)
         return ("ip", s)
     except ValueError:
         pass
 
-    # Téléphone : contient surtout des chiffres, éventuellement un +
+    # e-mail intégré dans une phrase  (« mon mail c'est a@b.fr »)
+    if " " in s or len(s) > 60:
+        m = _EMAIL_IN.search(s)
+        if m:
+            return ("email", m.group(0).lower())
+
+    # numéro intégré dans une phrase  (« le numéro est +33 6 12 34 56 78 »)
     digits = re.sub(r"\D", "", s)
     if _PHONEISH_RE.match(s) and 7 <= len(digits) <= 15:
         e164 = norm_phone(s, default_region)[0]
         return ("phone", e164 or ("+" + digits if s.startswith("+") else digits))
+    m = _PHONE_IN.search(s)
+    if m:
+        e164, meta = norm_phone(m.group(0), default_region)
+        if e164 and (meta.get("valid") or m.group(0).lstrip().startswith("+")):
+            return ("phone", e164)
 
     if _DOMAIN_RE.match(s) and " " not in s:
         return ("domain", s.lower())
