@@ -177,6 +177,14 @@ msg_ok "charge utile en place ($SRC)"
 if [[ -d "$SRC/tools" ]]; then
   install -d /usr/local/bin /opt/osint/lib /opt/osint/runs /opt/osint/cases /opt/osint/wordlists /etc/osint/monitors
   install -m0755 "$SRC"/tools/bin/*         /usr/local/bin/
+  chmod 0755 /usr/local/bin/osint*          # au cas où l'archive perd le bit +x
+  # certains « pct enter » ouvrent un shell au PATH minimal : garantir /usr/local/bin
+  cat >/etc/profile.d/osint-path.sh <<'EOF'
+case ":$PATH:" in *:/usr/local/bin:*) ;; *) export PATH="/usr/local/bin:$PATH" ;; esac
+EOF
+  chmod 0644 /etc/profile.d/osint-path.sh
+  grep -q '/usr/local/bin' /root/.bashrc 2>/dev/null || \
+    echo 'export PATH="/usr/local/bin:$PATH"' >>/root/.bashrc
   install -m0644 "$SRC"/tools/lib/common.sh /opt/osint/lib/common.sh
   rm -rf /opt/osint/lib/osintkit
   cp -r "$SRC/tools/lib/osintkit" /opt/osint/lib/osintkit
