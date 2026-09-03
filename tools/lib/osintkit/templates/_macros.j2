@@ -9,8 +9,14 @@
 {% for s in items %}
   <span class="chip">
     <b>{{ s.platform }}</b>
-    {% if s.url %}<a href="{{ s.url }}" target="_blank" rel="noopener">{{ s.handle or s.url }}</a>
-    {% else %}<small>{{ s.handle }}</small>{% endif %}
+    {% if s.url %}
+      <a href="{{ s.url }}" target="_blank" rel="noopener noreferrer">{{ s.url }}</a>
+      {% if s.guessed %}<span class="badge b-lo" title="URL reconstruite depuis un pseudo connu — à vérifier">URL déduite</span>{% endif %}
+    {% elif s.handle %}
+      <small>{{ s.handle }}</small>
+    {% else %}
+      <small>compte détecté — pas d'URL publique</small>
+    {% endif %}
     {{ conf_badge(s.confidence) }}
   </span>
 {% else %}

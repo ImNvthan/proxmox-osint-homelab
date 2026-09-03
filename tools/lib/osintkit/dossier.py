@@ -29,6 +29,19 @@ TPL_DIR = os.path.join(os.path.dirname(__file__), "templates")
 def _neighbors(g: Graph, pid: str):
     idx = {n["id"]: n for n in g.data["nodes"]}
     social, emails, phones, addrs, orgs, photos, related = [], [], [], [], [], [], []
+
+    # pseudos connus de la personne : servent à reconstruire une URL de profil
+    # pour les comptes détectés sans handle (holehe, socialscan)
+    known_handles: list[str] = []
+    for e in g.data["edges"]:
+        o = idx.get(e["dst"] if e["src"] == pid else e["src"] if e["dst"] == pid else None)
+        if o and o["kind"] == "username":
+            known_handles.append(o["label"])
+        elif o and o["kind"] == "account" and (o.get("attrs") or {}).get("handle"):
+            known_handles.append(o["attrs"]["handle"])
+    seen_h = set()
+    known_handles = [h for h in known_handles if h and not (h.lower() in seen_h or seen_h.add(h.lower()))]
+
     for e in g.data["edges"]:
         other = None
         if e["src"] == pid:
@@ -43,9 +56,14 @@ def _neighbors(g: Graph, pid: str):
             plat = a.get("platform") or (lbl.split("/")[0] if "/" in lbl else lbl)
             if plat and "." in plat and " " not in plat:
                 plat = platform_from_host(plat) or plat.rsplit(".", 1)[0]
-            social.append({"platform": plat,
-                           "handle": a.get("handle") or "",
-                           "url": a.get("url") or _guess_url(a, other["label"]),
+            handle = a.get("handle") or ""
+            url = a.get("url") or _profile_url(plat, handle)
+            guessed = False
+            if not url and known_handles:                 # compte connu sans handle
+                url = _profile_url(plat, known_handles[0])
+                guessed = bool(url)
+            social.append({"platform": plat, "handle": handle, "url": url,
+                           "guessed": guessed,
                            "confidence": max(c, other["confidence"])})
         elif k == "email":
             emails.append({"value": other["label"], "confidence": max(c, other["confidence"])})
@@ -79,23 +97,36 @@ def _neighbors(g: Graph, pid: str):
     }
 
 
-def _guess_url(attrs: dict, label: str) -> str:
-    plat = attrs.get("platform")
-    handle = attrs.get("handle")
-    if not (plat and handle):
-        if "/" in label:
-            plat, handle = label.split("/", 1)
-    base = {
-        "twitter": "https://x.com/", "instagram": "https://instagram.com/",
-        "facebook": "https://facebook.com/", "linkedin": "https://linkedin.com/in/",
-        "tiktok": "https://tiktok.com/@", "github": "https://github.com/",
-        "gitlab": "https://gitlab.com/", "youtube": "https://youtube.com/@",
-        "reddit": "https://reddit.com/user/", "telegram": "https://t.me/",
-        "pinterest": "https://pinterest.com/", "snapchat": "https://snapchat.com/add/",
-        "twitch": "https://twitch.tv/", "mastodon": "https://mastodon.social/@",
-        "bluesky": "https://bsky.app/profile/", "threads": "https://threads.net/@",
-    }.get(plat or "", "")
-    return (base + handle) if base and handle else ""
+_PROFILE_BASE = {
+    "twitter": "https://x.com/{}", "instagram": "https://instagram.com/{}",
+    "facebook": "https://facebook.com/{}", "linkedin": "https://linkedin.com/in/{}",
+    "tiktok": "https://tiktok.com/@{}", "github": "https://github.com/{}",
+    "gitlab": "https://gitlab.com/{}", "youtube": "https://youtube.com/@{}",
+    "reddit": "https://reddit.com/user/{}", "telegram": "https://t.me/{}",
+    "pinterest": "https://pinterest.com/{}", "snapchat": "https://snapchat.com/add/{}",
+    "twitch": "https://twitch.tv/{}", "mastodon": "https://mastodon.social/@{}",
+    "bluesky": "https://bsky.app/profile/{}", "threads": "https://threads.net/@{}",
+    "keybase": "https://keybase.io/{}", "medium": "https://medium.com/@{}",
+    "vk": "https://vk.com/{}", "odnoklassniki": "https://ok.ru/{}",
+    "flickr": "https://flickr.com/people/{}", "soundcloud": "https://soundcloud.com/{}",
+    "spotify": "https://open.spotify.com/user/{}", "vimeo": "https://vimeo.com/{}",
+    "dribbble": "https://dribbble.com/{}", "behance": "https://behance.net/{}",
+    "about.me": "https://about.me/{}", "tumblr": "https://{}.tumblr.com",
+    "wordpress": "https://{}.wordpress.com", "blogger": "https://{}.blogspot.com",
+    "patreon": "https://patreon.com/{}", "buymeacoffee": "https://buymeacoffee.com/{}",
+    "ko-fi": "https://ko-fi.com/{}", "strava": "https://strava.com/athletes/{}",
+    "goodreads": "https://goodreads.com/{}", "lastfm": "https://last.fm/user/{}",
+    "viadeo": "https://viadeo.com/p/{}", "copainsdavant": "https://copainsdavant.linternaute.com/p/{}",
+    "gravatar": "https://gravatar.com/{}", "onlyfans": "https://onlyfans.com/{}",
+    "discord": "https://discord.com/users/{}", "trombi": "https://trombi.com/{}",
+}
+
+
+def _profile_url(platform: str, handle: str) -> str:
+    if not (platform and handle):
+        return ""
+    tpl = _PROFILE_BASE.get(platform)
+    return tpl.format(handle) if tpl else ""
 
 
 def _person_dossier_ctx(g: Graph, node: dict) -> dict:

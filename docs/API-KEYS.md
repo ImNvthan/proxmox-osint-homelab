@@ -4,13 +4,35 @@ Le homelab est conçu pour être **utile sans aucune clé** (crt.sh, Shodan
 InternetDB, GreyNoise community, iptoasn, ipinfo, Wayback, DuckDuckGo, OTX,
 RapidDNS, HackerTarget, Anubis, `recherche-entreprises.api.gouv.fr`…).
 
+> **Recherche par nom → réseaux sociaux :** sans clé, `osint person` interroge
+> DuckDuckGo HTML, souvent **bloqué depuis un VPS/datacenter** → 0 résultat.
+> Pour que « nom → LinkedIn/Twitter/Insta » marche de façon fiable, ajoutez
+> `GOOGLE_CSE_KEY` + `GOOGLE_CSE_CX` (gratuit, 100 requêtes/jour) — voir ci-dessous.
+
+## Google Programmable Search (recommandé, gratuit)
+
+1. <https://programmablesearchengine.google.com/> → **Ajouter** un moteur →
+   cochez **« Rechercher sur l'ensemble du Web »** → créez-le → copiez l'**ID du
+   moteur de recherche** (`cx`).
+2. <https://console.cloud.google.com/> → créez/choisissez un projet →
+   **API et services → Bibliothèque →** activez **« Custom Search API »** →
+   **Identifiants → Créer des identifiants → Clé API** → copiez-la.
+3. Dans `/etc/osint/osint.env` :
+   ```
+   GOOGLE_CSE_KEY="AIza...."
+   GOOGLE_CSE_CX="xxxxxxxxxxxxxxxxx"
+   ```
+4. `osint doctor` → la ligne `GOOGLE_CSE_KEY` doit passer ✔. Quota : 100/jour
+   (au-delà : erreur 429, on retombe sur DuckDuckGo).
+
 Ajouter des clés élargit la couverture. Éditez `/etc/osint/osint.env`
 (`cp /opt/osint/src/tools/etc/osint.env.example /etc/osint/osint.env` s'il
 manque), puis `osint doctor`.
 
 | Variable | Fournisseur | Palier gratuit | Débloque |
 |---|---|---|---|
-| `SERPAPI_KEY` | serpapi.com | 100/mois | recherche web fiable pour `osint relations` (sinon DuckDuckGo HTML) |
+| `GOOGLE_CSE_KEY` + `GOOGLE_CSE_CX` | Google Programmable Search | **100/jour** | recherche web fiable pour `osint person` / `relations` (profils LinkedIn, Twitter…) |
+| `SERPAPI_KEY` | serpapi.com | 100/mois | idem, repli si pas de clé Google |
 | `SHODAN_API_KEY` | shodan.io | avec compte | données d'hôte complètes (`osint ip`), SpiderFoot |
 | `HIBP_API_KEY` | haveibeenpwned.com | payant | fuites dans `osint email` |
 | `HUNTER_API_KEY` | hunter.io | 25/mois | vérification d'e-mail, e-mails d'un domaine |

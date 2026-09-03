@@ -10,6 +10,7 @@ authentification, aucun contournement de CGU.
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import time
@@ -71,7 +72,27 @@ def _serpapi(query: str, key: str) -> list[dict]:
             for it in j.get("organic_results", [])]
 
 
-def search(query: str, serpapi_key: str = "") -> list[dict]:
+def _google_cse(query: str, key: str, cx: str) -> list[dict]:
+    """Google Programmable Search — 100 requêtes/jour gratuites."""
+    if requests is None or not (key and cx):
+        return []
+    try:
+        r = requests.get("https://www.googleapis.com/customsearch/v1",
+                         params={"key": key, "cx": cx, "q": query, "num": 10, "hl": "fr"},
+                         timeout=TIMEOUT)
+        j = r.json()
+    except Exception:
+        return []
+    return [{"title": it.get("title", ""), "url": it.get("link", ""), "snippet": it.get("snippet", "")}
+            for it in j.get("items", [])]
+
+
+def search(query: str, serpapi_key: str = "", google_key: str = "", google_cx: str = "") -> list[dict]:
+    # priorité : Google CSE (100/j) > SerpAPI (100/mois) > DuckDuckGo (sans clé)
+    if google_key and google_cx:
+        res = _google_cse(query, google_key, google_cx)
+        if res:
+            return res
     if serpapi_key:
         res = _serpapi(query, serpapi_key)
         if res:
@@ -93,12 +114,13 @@ def person_dorks(name: str, city: str = "", company: str = "") -> list[str]:
     ]
 
 
-def search_person(name: str, city: str = "", company: str = "",
-                  serpapi_key: str = "", max_queries: int = 6, pause: float = 1.4) -> dict:
+def search_person(name: str, city: str = "", company: str = "", serpapi_key: str = "",
+                  google_key: str = "", google_cx: str = "",
+                  max_queries: int = 6, pause: float = 1.4) -> dict:
     dorks = person_dorks(name, city, company)
     results: list[dict] = []
     for d in dorks[:max_queries]:
-        for hit in search(d, serpapi_key):
+        for hit in search(d, serpapi_key, google_key, google_cx):
             results.append({**hit, "query": d})
         time.sleep(pause)
 
@@ -143,7 +165,12 @@ def main(argv: list[str]) -> int:
     for i, a in enumerate(argv):
         if a in opt and i + 1 < len(argv):
             opt[a] = argv[i + 1]
-    data = search_person(name, opt["--ville"], opt["--entreprise"], opt["--serpapi"])
+    data = search_person(
+        name, opt["--ville"], opt["--entreprise"],
+        serpapi_key=opt["--serpapi"] or os.environ.get("SERPAPI_KEY", ""),
+        google_key=os.environ.get("GOOGLE_CSE_KEY", ""),
+        google_cx=os.environ.get("GOOGLE_CSE_CX", ""),
+    )
     js = json.dumps(data, ensure_ascii=False, indent=2)
     if opt["--out"]:
         with open(opt["--out"], "w", encoding="utf-8") as fh:

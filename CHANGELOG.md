@@ -5,10 +5,13 @@ Format librement inspiré de [Keep a Changelog](https://keepachangelog.com/).
 ## [2.0.2] - 2026-09-03
 
 ### Ajouté
-- `osintkit.websearch` : recherche web SANS clé (DuckDuckGo HTML, repli SerpAPI
-  si `SERPAPI_KEY`). `osint-recon-person` l'exécute désormais sur le nom lui-même
-  → sort les profils **LinkedIn / Twitter / Instagram / GitHub…** à partir d'un
-  nom, sans clé d'API.
+- `osintkit.websearch` : recherche web pour `osint-recon-person` (et `relations`),
+  ordre de priorité **Google CSE (100/jour) → SerpAPI (100/mois) → DuckDuckGo
+  (sans clé)**. Sort les profils **LinkedIn / Twitter / Instagram / GitHub…** à
+  partir d'un nom. Clés : `GOOGLE_CSE_KEY` + `GOOGLE_CSE_CX` (voir docs/API-KEYS).
+- Affiche : **chaque réseau social est un lien cliquable** (URL complète). Les
+  comptes détectés sans handle (holehe/socialscan) reçoivent une URL reconstruite
+  depuis un pseudo connu, marquée « URL déduite ».
 
 ### Corrigé
 - **Classification** : un `+33…` ou un e-mail *au milieu d'une phrase* est

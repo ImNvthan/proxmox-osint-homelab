@@ -15,6 +15,7 @@ de famille — confiance basse par construction, à valider humainement.
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import time
@@ -22,6 +23,7 @@ from urllib.parse import urlparse
 
 from .extract import KIN_WORDS, NAME_RE
 from .normalize import platform_from_host, split_name, strip_accents
+from .websearch import search as _websearch  # Google CSE > SerpAPI > DuckDuckGo
 
 try:
     import requests
@@ -30,6 +32,12 @@ except Exception:
 
 UA = "Mozilla/5.0 (X11; Linux x86_64) osint-lxc/2.0 (+recherche autorisée uniquement)"
 TIMEOUT = 20
+
+
+def search(query: str, serpapi_key: str = "") -> list[dict]:
+    return _websearch(query, serpapi_key,
+                      os.environ.get("GOOGLE_CSE_KEY", ""),
+                      os.environ.get("GOOGLE_CSE_CX", ""))
 
 
 # --------------------------------------------------------------------------- #
@@ -47,60 +55,6 @@ def build_dorks(name: str, company: str = "", city: str = "") -> list[str]:
         f'{q}{c} (adresse OR domicile OR "demeurant")',
         f'{q} (filetype:pdf OR filetype:docx)',
     ]
-
-
-# --------------------------------------------------------------------------- #
-def _ddg(query: str) -> list[dict]:
-    """DuckDuckGo HTML (pas de clé). Renvoie [{title,url,snippet}]."""
-    if requests is None:
-        return []
-    try:
-        r = requests.post("https://html.duckduckgo.com/html/", data={"q": query},
-                          headers={"User-Agent": UA}, timeout=TIMEOUT)
-        r.raise_for_status()
-    except Exception:
-        return []
-    page = r.text
-    out = []
-    # ancres de résultat
-    anchors = re.findall(r'<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>', page, re.S)
-    snippets = re.findall(r'class="result__snippet"[^>]*>(.*?)</a>', page, re.S)
-    for i, (href, title_html) in enumerate(anchors[:15]):
-        url = re.sub(r"^.*?uddg=", "", href)
-        try:
-            url = requests.utils.unquote(url)
-        except Exception:
-            pass
-        title = re.sub(r"<[^>]+>", "", title_html or "").strip()
-        snip = re.sub(r"<[^>]+>", "", snippets[i] if i < len(snippets) else "").strip()
-        if url.startswith("http"):
-            out.append({"title": title, "url": url, "snippet": snip})
-    return out
-
-
-def _serpapi(query: str, key: str) -> list[dict]:
-    if requests is None:
-        return []
-    try:
-        r = requests.get("https://serpapi.com/search.json",
-                         params={"q": query, "api_key": key, "hl": "fr", "num": 15},
-                         timeout=TIMEOUT)
-        j = r.json()
-    except Exception:
-        return []
-    out = []
-    for it in j.get("organic_results", []):
-        out.append({"title": it.get("title", ""), "url": it.get("link", ""),
-                    "snippet": it.get("snippet", "")})
-    return out
-
-
-def search(query: str, serpapi_key: str = "") -> list[dict]:
-    if serpapi_key:
-        res = _serpapi(query, serpapi_key)
-        if res:
-            return res
-    return _ddg(query)
 
 
 # --------------------------------------------------------------------------- #
