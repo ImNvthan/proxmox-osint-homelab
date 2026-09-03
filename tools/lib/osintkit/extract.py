@@ -107,17 +107,23 @@ def extract(run_dir: str, region: str = "FR") -> list[dict]:
             if m:
                 push(_sel("account", m.group(1).lower(), "holehe", 0.8))
 
-    # ---- sherlock : un fichier par pseudo, lignes = URLs ---------------
+    # ---- sherlock : lignes = URLs. TRÈS bruité (faux positifs) : on ne
+    #      garde que les plateformes connues, en confiance basse (« piste »).
+    sherlock_urls: list[str] = []
     sd = P("sherlock_d")
     if os.path.isdir(sd):
         for f in os.listdir(sd):
-            for u in URL_RE.findall(_read(os.path.join(sd, f))):
-                plat, handle = platform_from_url(u)
-                push(_sel("account", f"{plat}/{handle}" if plat and handle else u,
-                          "sherlock", 0.75, url=u))
-    for u in URL_RE.findall(_read(P("sherlock.txt"))):
+            sherlock_urls += URL_RE.findall(_read(os.path.join(sd, f)))
+    sherlock_urls += URL_RE.findall(_read(P("sherlock.txt")))
+    kept = 0
+    for u in dict.fromkeys(sherlock_urls):
         plat, handle = platform_from_url(u)
-        push(_sel("account", f"{plat}/{handle}" if plat and handle else u, "sherlock", 0.75, url=u))
+        if not (plat and handle):
+            continue                       # ignore les sites inconnus / templates
+        push(_sel("account", f"{plat}/{handle}", "sherlock", 0.5, url=u))
+        kept += 1
+        if kept >= 30:
+            break
 
     # ---- maigret : JSON riche (fullname, gaia, location, image) --------
     md = P("maigret_d")
@@ -265,11 +271,12 @@ def extract(run_dir: str, region: str = "FR") -> list[dict]:
         if pp.get("region"):
             push(_sel("address", str(pp["region"]), "phonenumbers", 0.3))
 
-    # ---- person : promeut quelques pseudos candidats pour le pivot -
+    # ---- person : promeut les 3 meilleurs pseudos candidats pour le pivot
     if rtype == "person":
         cand = [u.strip() for u in _read(P("usernames.txt")).splitlines() if u.strip()]
-        for u in cand[:5]:
-            push(_sel("username", u, "permutation", 0.58))
+        for u in cand[:3]:
+            if re.fullmatch(r"[a-z0-9][a-z0-9._-]{2,30}", u):
+                push(_sel("username", u, "permutation", 0.58))
         for e in [x.strip() for x in _read(P("emails.txt")).splitlines() if x.strip()][:6]:
             if EMAIL_RE.fullmatch(e):
                 push(_sel("email", norm_email(e), "permutation", 0.35))

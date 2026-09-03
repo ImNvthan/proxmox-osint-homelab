@@ -139,4 +139,6 @@ finish_run() {
 }
 
 # curl avec des valeurs par défaut raisonnables
-oget() { curl -fsSL --max-time 30 -A "Mozilla/5.0 (osint-lxc)" "$@"; }
+oget() { curl -fsSL --max-time 30 --retry 2 -A "Mozilla/5.0 (osint-lxc)" "$@"; }
+# exporté pour être visible dans les sous-shells « bash -c » de run_sh
+export -f oget 2>/dev/null || true

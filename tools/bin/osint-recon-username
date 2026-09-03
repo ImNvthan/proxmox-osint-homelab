@@ -17,11 +17,14 @@ if have sherlock; then
 fi
 
 if have maigret; then
+  mkdir -p "$RUNDIR/raw/maigret_d"
+  # invocation minimale : un seul format JSON, pas de HTML, pas de -T.
+  # stdout de run_sh = le rapport JSON ; le bavardage de maigret part dans logs/.
   run_sh maigret maigret.txt \
-    "maigret '$TARGET' --no-progressbar --timeout 15 -T 20 -fo '$RUNDIR/raw/maigret_d' -J ndjson -C -H 2>/dev/null; \
-     maigret '$TARGET' --no-progressbar --timeout 15 -T 20 -fo '$RUNDIR/raw/maigret_d' -J simple 2>/dev/null; \
-     cat '$RUNDIR/raw/maigret_d'/report_${TARGET}_simple.json 2>/dev/null"
-  cp "$RUNDIR/raw/maigret_d"/report_"${TARGET}".html "$RUNDIR/maigret.html" 2>/dev/null || true
+    "maigret '$TARGET' --no-progressbar --timeout 20 -fo '$RUNDIR/raw/maigret_d' -J simple \
+       >/dev/null 2>>'$RUNDIR/logs/maigret-tool.log' || true; \
+     cat '$RUNDIR/raw/maigret_d'/report_'${TARGET}'_simple.json 2>/dev/null || \
+     cat '$RUNDIR/raw/maigret_d'/*'${TARGET}'*simple*.json 2>/dev/null || true"
 fi
 
 if have blackbird; then
@@ -32,9 +35,10 @@ fi
 
 have socialscan && run socialscan socialscan.json -- socialscan "$TARGET" --json "$RUNDIR/raw/socialscan.json"
 
-run_sh github-profile github.json "oget https://api.github.com/users/$TARGET"
-run_sh gitlab-profile gitlab.json "oget 'https://gitlab.com/api/v4/users?username=$TARGET'"
-run_sh keybase keybase.json "oget 'https://keybase.io/_/api/1.0/user/lookup.json?usernames=$TARGET'"
+CURL="curl -fsSL --max-time 30 --retry 2 -A Mozilla/5.0"
+run_sh github-profile github.json "$CURL 'https://api.github.com/users/$TARGET'"
+run_sh gitlab-profile gitlab.json "$CURL 'https://gitlab.com/api/v4/users?username=$TARGET'"
+run_sh keybase       keybase.json "$CURL 'https://keybase.io/_/api/1.0/user/lookup.json?usernames=$TARGET'"
 
 { for d in gmail.com outlook.com proton.me yahoo.com icloud.com; do echo "${TARGET}@${d}"; done; } >candidate-emails.txt
 

@@ -2,6 +2,25 @@
 
 Format librement inspiré de [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.0.3] - 2026-09-03
+
+### Corrigé (bugs vus en test réel sur un nom à forte empreinte)
+- **`rc=127` sur github/gitlab/keybase** : `oget` (fonction shell) n'existait pas
+  dans le `bash -c` de `run_sh`. `oget` est désormais `export -f`, et
+  `osint-recon-username` appelle `curl` directement.
+- **Cascade de faux positifs** : l'autopilote pivotait sur les bouts d'URL de
+  sherlock (`add`, `people`, `profile`, `emmanuelmacron?uselang=qqx`…) → 25 runs
+  inutiles. `enqueue_from_run` ne pivote plus QUE sur `email`, `person_name`, et
+  les pseudos issus des permutations/websearch (max 3, format validé, liste noire
+  de mots génériques). **Plus aucun pivot depuis un compte trouvé.**
+- **sherlock trop bruité** : `extract` ne garde que les comptes sur plateformes
+  connues, en confiance 0.5 (« piste », jamais pivoté), plafonné à 30.
+- **maigret `rc=1` systématique** : invocation réduite au minimum (`-J simple`
+  seul, sans `-T`/`-H`/`ndjson`/double run) ; le bavardage part dans
+  `logs/maigret-tool.log`.
+- **`websearch results: []`** : bascule sur `lite.duckduckgo.com` (plus fiable
+  depuis un datacenter) avec repli sur l'endpoint HTML.
+
 ## [2.0.2] - 2026-09-03
 
 ### Ajouté

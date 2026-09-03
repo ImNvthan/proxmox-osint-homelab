@@ -29,7 +29,46 @@ EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,24}")
 PHONE_RE = re.compile(r"(?:\+33|0)\s?[1-9](?:[\s.\-]?\d{2}){4}")
 
 
-def _ddg(query: str) -> list[dict]:
+def _unwrap(href: str) -> str:
+    u = re.sub(r"^/l/\?.*?uddg=", "", href)
+    u = re.sub(r"^.*?[?&]uddg=", "", u)
+    u = u.split("&rut=")[0].split("&amp;rut=")[0]
+    try:
+        u = requests.utils.unquote(u)
+    except Exception:
+        pass
+    return u
+
+
+def _ddg_lite(query: str) -> list[dict]:
+    """lite.duckduckgo.com — table minimale, plus fiable depuis un datacenter."""
+    if requests is None:
+        return []
+    for attempt in (0, 1):
+        try:
+            r = requests.get("https://lite.duckduckgo.com/lite/", params={"q": query, "kl": "fr-fr"},
+                             headers={"User-Agent": UA, "Accept-Language": "fr,en;q=0.8"}, timeout=TIMEOUT)
+            if r.status_code == 200 and "result-link" in r.text:
+                break
+        except Exception:
+            pass
+        time.sleep(2)
+    else:
+        return []
+    page = r.text
+    links = re.findall(r'<a[^>]+class="result-link"[^>]+href="([^"]+)"[^>]*>(.*?)</a>', page, re.S)
+    snips = re.findall(r'<td[^>]*class="result-snippet"[^>]*>(.*?)</td>', page, re.S)
+    out = []
+    for i, (href, title_html) in enumerate(links[:20]):
+        u = _unwrap(href)
+        if not u.startswith("http"):
+            continue
+        out.append({"title": re.sub(r"<[^>]+>", "", title_html or "").strip(), "url": u,
+                    "snippet": re.sub(r"<[^>]+>", "", snips[i] if i < len(snips) else "").strip()})
+    return out
+
+
+def _ddg_html(query: str) -> list[dict]:
     if requests is None:
         return []
     try:
@@ -43,20 +82,16 @@ def _ddg(query: str) -> list[dict]:
     snips = re.findall(r'class="result__snippet"[^>]*>(.*?)</a>', page, re.S)
     out = []
     for i, (href, title_html) in enumerate(anchors[:20]):
-        url = re.sub(r"^.*?[?&]uddg=", "", href)
-        try:
-            url = requests.utils.unquote(url)
-        except Exception:
-            pass
-        url = url.split("&rut=")[0]
-        if not url.startswith("http"):
+        u = _unwrap(href)
+        if not u.startswith("http"):
             continue
-        out.append({
-            "title": re.sub(r"<[^>]+>", "", title_html or "").strip(),
-            "url": url,
-            "snippet": re.sub(r"<[^>]+>", "", snips[i] if i < len(snips) else "").strip(),
-        })
+        out.append({"title": re.sub(r"<[^>]+>", "", title_html or "").strip(), "url": u,
+                    "snippet": re.sub(r"<[^>]+>", "", snips[i] if i < len(snips) else "").strip()})
     return out
+
+
+def _ddg(query: str) -> list[dict]:
+    return _ddg_lite(query) or _ddg_html(query)
 
 
 def _serpapi(query: str, key: str) -> list[dict]:

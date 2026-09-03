@@ -97,26 +97,34 @@ print(node_id(kind, v) if kind else "")
 PY
 }
 
-# enqueue_from_run <rundir> <profondeur-actuelle> : met en file les sélecteurs
-# exploitables (confiance >= MINCONF) trouvés dans une exécution, à profondeur+1.
+# enqueue_from_run <rundir> <profondeur> : met en file les sélecteurs à pivoter.
+# TRÈS conservateur : e-mail + nom de personne + pseudos issus des permutations
+# (max 3). PAS de pivot sur les comptes trouvés (sinon on chasse des bouts d'URL
+# type « add », « people », « profile »…).
+OSINT_STOPWORDS="add people profile user users search home login logout account admin default index api www about help contact team status support official page channel"
 enqueue_from_run() {
-  local rundir="$1" d="$2"
+  local rundir="$1" d="$2" n_user=0
   [[ -s "$rundir/selectors.jsonl" ]] || return 0
-  while IFS=$'\t' read -r nk nv; do
+  while IFS=$'\t' read -r nk nv nsrc; do
     [[ -n "$nk" && -n "$nv" ]] || continue
     seen "$nk" "$nv" && continue
     grep -qiFx "$nk"$'\t'"$nv" "$QUEUE" 2>/dev/null && continue
+    if [[ "$nk" == username ]]; then
+      [[ "$nv" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{2,30}$ ]] || continue
+      [[ "$(tr -cd . <<<"$nv" | wc -c)" -ge 2 ]] && continue   # rejette x.y.z (domaine)
+      case " $OSINT_STOPWORDS " in *" ${nv,,} "*) continue ;; esac
+      (( n_user >= 3 )) && continue
+      n_user=$((n_user+1))
+    fi
     printf '%s\t%s\t%s\n' "$nk" "$nv" "$((d+1))" >>"$QUEUE"
     log "   + pivot : $nk = $nv"
   done < <(
     jq -r --argjson mc "$MINCONF" '
       select(.confidence >= $mc) |
-      if   .kind=="email"       then "email\t"+(.value|ascii_downcase)
-      elif .kind=="phone"       then "phone\t"+.value
-      elif .kind=="username"    then "username\t"+.value
-      elif .kind=="person_name" then "person\t"+.value
-      elif .kind=="account" and (.value|test("/"))
-                                then "username\t"+(.value|sub(".*/";""))
+      if   .kind=="email"       then "email\t"+(.value|ascii_downcase)+"\t"+(.source//"")
+      elif .kind=="person_name" then "person\t"+.value+"\t"+(.source//"")
+      elif .kind=="username" and ((.source//"")|test("permutation|websearch|cible"))
+                                then "username\t"+.value+"\t"+(.source//"")
       else empty end
     ' "$rundir/selectors.jsonl" 2>/dev/null | sort -u
   )
